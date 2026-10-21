@@ -16,7 +16,7 @@ jobs:
         os: [macos-14, macos-15, macos-26, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain
         run: |
@@ -91,7 +91,7 @@ jobs:
         os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the formula from this commit
         run: |
           brew tap-new --no-git local/test
@@ -99,7 +99,8 @@ jobs:
           # build from this exact checkout instead of a published tarball
           tar -czf /tmp/cp-mac.tar.gz --exclude .git -C "$GITHUB_WORKSPACE/.." "$(basename "$GITHUB_WORKSPACE")"
           sha="$(shasum -a 256 /tmp/cp-mac.tar.gz | cut -d' ' -f1)"
-          sed -e "s|^  url .*|  url \"file:///tmp/cp-mac.tar.gz\"|" \
+          sed -e "s|^  url .*|  url \"file:///tmp/cp-mac.tar.gz\"\\
+            version \"$(cat VERSION)\"|" \
               -e "s|^  sha256 .*|  sha256 \"$sha\"|" \
               -e "s|^  head .*||" \
               Formula/cp-mac.rb > "$tap/Formula/cp-mac.rb"
@@ -117,7 +118,7 @@ jobs:
     name: ubuntu (clang + libc++)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install clang and libc++
         run: sudo apt-get update && sudo apt-get install -y clang libc++-dev libc++abi-dev
       - name: Tests with libc++
