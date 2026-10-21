@@ -1,6 +1,6 @@
 # Homebrew formula for cp-mac.
-# The published copy lives in https://github.com/Paras-ydv/homebrew-tap,
-# so users can run:  brew install paras-ydv/tap/cp-mac
+# The published copy lives in https://github.com/Paras-ydv/homebrew-cp,
+# so users can run:  brew install paras-ydv/cp/cp-mac
 class CpMac < Formula
   desc "Make bits/stdc++.h, pb_ds and rope work with Apple Clang for competitive programming"
   homepage "https://github.com/Paras-ydv/cp-mac"

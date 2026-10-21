@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/Paras-ydv/cp-mac/main/install.sh | 
 **Homebrew:**
 
 ```sh
-brew install paras-ydv/tap/cp-mac
+brew install paras-ydv/cp/cp-mac
 cp-mac link        # Apple Silicon only: lets Apple Clang find Homebrew's headers
 ```
 
