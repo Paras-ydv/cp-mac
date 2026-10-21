@@ -19,9 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----------------------------------------------------------------------------
-This license covers cp-mac's own files. The files under include/ext/ are
-GCC's libstdc++ extension headers (pb_ds and rope), modified for Clang. They
-remain under the GNU GPL v3 or later with the GCC Runtime Library Exception
-3.1, exactly as GCC distributes them. See third_party/gcc/.

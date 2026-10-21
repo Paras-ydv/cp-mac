@@ -1,0 +1,10 @@
+cp-mac
+https://github.com/Paras-ydv/cp-mac
+
+cp-mac's own files are under the MIT License (see LICENSE).
+
+The files under include/ext/ are GCC's libstdc++ extension headers (pb_ds and
+rope), modified for Clang by scripts/vendor-gcc.sh. They remain under the GNU
+General Public License v3 or later with the GCC Runtime Library Exception 3.1,
+exactly as GCC distributes them. See third_party/gcc/ for the license texts
+and the GCC revision they come from.
