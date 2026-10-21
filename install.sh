@@ -68,9 +68,11 @@ uninstall() {
   [ -f "$MANIFEST" ] || die "cp-mac doesn't appear to be installed in $PREFIX (no $MANIFEST)."
   need_sudo
   say "Removing cp-mac from $PREFIX"
+  failed=0
   while IFS= read -r f; do
-    [ -n "$f" ] && $SUDO rm -f "$PREFIX/$f"
+    [ -z "$f" ] || $SUDO rm -f "$PREFIX/$f" || failed=1
   done < "$MANIFEST"
+  [ "$failed" = 0 ] || die "Some files could not be removed (see above). The manifest is kept at $MANIFEST so you can retry."
   $SUDO rm -f "$MANIFEST" "$INC/cp-mac/VERSION"
   # remove now-empty directories we created
   for d in "$INC/ext/pb_ds" "$INC/cp-mac" "$INC/ext" "$INC/bits"; do
@@ -171,7 +173,7 @@ int main() {
 EOF
 EXTRA=""
 [ "$PREFIX" != /usr/local ] && EXTRA="-I$INC"
-if "$CXX_BIN" -std=c++17 $EXTRA "$T/t.cpp" -o "$T/t" 2>"$T/err" && [ "$("$T/t")" = ok ]; then
+if "$CXX_BIN" -std=c++17 ${EXTRA:+"$EXTRA"} "$T/t.cpp" -o "$T/t" 2>"$T/err" && [ "$("$T/t")" = ok ]; then
   ok "Self-test passed with $("$CXX_BIN" --version 2>/dev/null | head -1)"
   rm -rf "$T"
 else

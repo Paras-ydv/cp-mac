@@ -234,7 +234,9 @@ cmd_uninstall() {
         [ -n "$f" ] && [ -d "$(dirname "$PREFIX/$f")" ] && [ ! -w "$(dirname "$PREFIX/$f")" ] && SUDO="sudo"
       done < "$M"
       [ -w "$PREFIX/include/cp-mac" ] || SUDO="sudo"
-      while IFS= read -r f; do [ -n "$f" ] && $SUDO rm -f "$PREFIX/$f"; done < "$M"
+      failed=0
+      while IFS= read -r f; do [ -z "$f" ] || $SUDO rm -f "$PREFIX/$f" || failed=1; done < "$M"
+      [ "$failed" = 0 ] || die "some files could not be removed (see above); the manifest is kept at $M so you can retry."
       $SUDO rm -f "$M" "$PREFIX/include/cp-mac/VERSION"
       for d in "$PREFIX/include/ext/pb_ds" "$PREFIX/include/cp-mac" "$PREFIX/include/ext" "$PREFIX/include/bits"; do
         [ -d "$d" ] && $SUDO find "$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
