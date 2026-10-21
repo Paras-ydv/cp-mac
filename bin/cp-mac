@@ -4,92 +4,271 @@
 set -u
 
 CPMAC_REPO="Paras-ydv/cp-mac"
+HOME="${HOME:-/tmp}"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/cp-mac"
-LINK_DIR="/usr/local/include"
+LINK_DIR="${CPMAC_LINK_DIR:-/usr/local/include}"
+AGENT_LABEL="io.github.paras-ydv.cp-mac.autoupdate"
+AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 
-if [ -t 2 ]; then B="$(printf '\033[1m')"; G="$(printf '\033[32m')"; R="$(printf '\033[31m')"; Y="$(printf '\033[33m')"; D="$(printf '\033[2m')"; N="$(printf '\033[0m')"
+# Colours only on terminals, decided per stream: results go to stdout,
+# compiler chatter and notices to stderr.
+if [ -t 1 ]; then B="$(printf '\033[1m')"; G="$(printf '\033[32m')"; R="$(printf '\033[31m')"; Y="$(printf '\033[33m')"; D="$(printf '\033[2m')"; N="$(printf '\033[0m')"
 else B=""; G=""; R=""; Y=""; D=""; N=""; fi
+if [ -t 2 ]; then ER="$(printf '\033[31m')"; EY="$(printf '\033[33m')"; ED="$(printf '\033[2m')"; EN="$(printf '\033[0m')"
+else ER=""; EY=""; ED=""; EN=""; fi
+rc=0
 ok()   { printf '  %s✓%s %s\n' "$G" "$N" "$*"; }
-bad()  { printf '  %sx%s %s\n' "$R" "$N" "$*"; }
+bad()  { printf '  %sx%s %s\n' "$R" "$N" "$*"; rc=1; }
 warn() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
-die()  { printf '%scp-mac:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+die()  { printf '%scp-mac:%s %s\n' "$ER" "$EN" "$*" >&2; exit 1; }
+note() { printf '%s%s%s\n' "$ED" "$*" "$EN" >&2; }
 
 # Resolve this script's real location (macOS before 13 has no realpath).
 self="$0"
-case "$self" in */*) ;; *) self="$(command -v "$self")" ;; esac
+case "$self" in
+  */*) ;;
+  *) if [ -f "$self" ]; then self="./$self"; else self="$(command -v "$self")"; fi ;;
+esac
 while [ -L "$self" ]; do
   link="$(readlink "$self")"
   case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
 done
-SELF_DIR="$(cd "$(dirname "$self")" && pwd)"
-PREFIX="$(cd "$SELF_DIR/.." && pwd)"
+SELF_DIR="$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd)"
+PREFIX="$(CDPATH='' cd -- "$SELF_DIR/.." && pwd)"
 case "$PREFIX" in */Cellar/*) INSTALL_KIND=brew ;; *) INSTALL_KIND=script ;; esac
 [ -f "$PREFIX/install.sh" ] && INSTALL_KIND=source   # running from a clone
 VERSION="$(cat "$PREFIX/include/cp-mac/VERSION" 2>/dev/null || cat "$PREFIX/VERSION" 2>/dev/null || echo dev)"
 
+# The compiler as a command line: CXX may carry arguments (CXX="ccache clang++"),
+# so callers use $cxx unquoted.
 pick_cxx() {
-  if [ -n "${CXX:-}" ]; then echo "$CXX"; return; fi
+  if [ -n "${CXX:-}" ]; then
+    command -v "${CXX%% *}" >/dev/null 2>&1 || die "CXX is set to '$CXX', but '${CXX%% *}' was not found."
+    echo "$CXX"; return
+  fi
   for c in clang++ c++ g++; do command -v "$c" >/dev/null 2>&1 && { echo "$c"; return; }; done
   die "no C++ compiler found. On a Mac run: xcode-select --install"
 }
 
+# shellcheck disable=SC2086
+is_clang() { $1 --version 2>/dev/null | grep -qi clang; }
+
 # Directory holding our headers, for when the compiler doesn't find them itself.
+# For Homebrew, use the version-independent opt/ path so links survive upgrades.
 include_dir() {
-  if [ "$INSTALL_KIND" = brew ] && command -v brew >/dev/null 2>&1; then
-    p="$(brew --prefix cp-mac 2>/dev/null)/include"
-    [ -d "$p" ] && { echo "$p"; return; }
-  fi
+  case "$PREFIX" in
+    */Cellar/*) p="${PREFIX%%/Cellar/*}/opt/cp-mac/include"; [ -d "$p" ] && { echo "$p"; return; } ;;
+  esac
   echo "$PREFIX/include"
 }
 
 finds_headers() {  # does the compiler find <bits/stdc++.h> + pb_ds without -I?
+  # shellcheck disable=SC2086
   printf '#include <bits/stdc++.h>\n#include <ext/pb_ds/assoc_container.hpp>\nint main(){}\n' |
-    "$1" -x c++ -std=c++17 -fsyntax-only - >/dev/null 2>&1
+    $1 -x c++ -std=c++17 -fsyntax-only - >/dev/null 2>&1
+}
+
+found_header() {  # the <bits/stdc++.h> the compiler picks up without -I
+  # shellcheck disable=SC2086
+  printf '#include <bits/stdc++.h>\n' | $1 -x c++ -std=c++17 -H -fsyntax-only - 2>&1 |
+    grep 'stdc++.h' | head -1 | sed 's/^\.* //'
+}
+
+# Can we change $1 (or create it) without sudo?
+writable() {
+  d="$1"
+  while [ ! -e "$d" ] && [ ! -L "$d" ]; do d="$(dirname "$d")"; done
+  [ -w "$d" ]
+}
+
+# Would a script install in $PREFIX need sudo to change? (Every folder we write,
+# not just include/ and bin/: an install that used sudo leaves bits/, ext/pb_ds/...
+# owned by root.)
+prefix_needs_sudo() {
+  writable "$PREFIX/include" && writable "$PREFIX/bin" || return 0
+  ! find "$PREFIX/include/bits" "$PREFIX/include/ext" "$PREFIX/include/cp-mac" -type d 2>/dev/null |
+    { while IFS= read -r d; do [ -w "$d" ] || exit 1; done; }
+}
+
+# Run a step once a day at most: once_a_day <name> && do-it
+once_a_day() {
+  mkdir -p "$CACHE" 2>/dev/null || return 1
+  [ -n "$(find "$CACHE/$1.stamp" -mtime -1 2>/dev/null)" ] && return 1
+  touch "$CACHE/$1.stamp" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Updates: find the latest GitHub release. Releases, not commits, so nobody
+# gets a half-finished change in the middle of a contest.
+
+latest_release() {  # prints the latest release tag (e.g. v1.1.0), fails if unknown
+  u="$(curl -fsSIL -m 10 -o /dev/null -w '%{url_effective}' "https://github.com/$CPMAC_REPO/releases/latest" 2>/dev/null)" || return 1
+  case "$u" in */releases/tag/*) echo "${u##*/releases/tag/}" ;; *) return 1 ;; esac
+}
+
+version_gt() {  # version_gt A B: is A newer than B? (dotted numbers)
+  awk -v a="${1#v}" -v b="${2#v}" 'BEGIN {
+    n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m
+    for (i = 1; i <= n; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+    exit 1 }'
+}
+
+# Prints one line when a newer release is out. The check itself runs in the
+# background at most once a day, so it never slows anything down.
+# Off with CPMAC_NO_UPDATE_CHECK=1 (and always off in CI).
+update_notice() {
+  [ -z "${CPMAC_NO_UPDATE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ "$INSTALL_KIND" != source ] || return 0
+  if [ -t 2 ] && [ -f "$CACHE/latest" ]; then
+    latest="$(cat "$CACHE/latest" 2>/dev/null)"
+    if [ -n "$latest" ] && version_gt "$latest" "$VERSION"; then
+      printf '%scp-mac %s is available (you have %s). Update with: cp-mac update%s\n' "$EY" "${latest#v}" "$VERSION" "$EN" >&2
+    fi
+  fi
+  if command -v curl >/dev/null 2>&1 && once_a_day update-check; then
+    ( t="$(latest_release)" && printf '%s\n' "$t" > "$CACHE/latest.$$" && mv -f "$CACHE/latest.$$" "$CACHE/latest" ) \
+      </dev/null >/dev/null 2>&1 &
+  fi
+}
+
+# ---------------------------------------------------------------------------
+link_hint() {  # Homebrew on Apple Silicon, not linked yet: remind once a day
+  [ "$INSTALL_KIND" = brew ] && [ "$(uname -s)" = Darwin ] && [ -t 2 ] || return 0
+  once_a_day link-hint || return 0
+  note "tip: run 'cp-mac link' once so clang++, g++ and your editor find these headers too (cprun works either way)."
+}
+
+# PCH is safe only if nothing before '#include <bits/stdc++.h>' can change how
+# it compiles (a #define _GLIBCXX_DEBUG or #define int long long, say).
+pch_ok() {
+  awk '
+    /^[ \t]*#[ \t]*include[ \t]*<bits\/stdc\+\+\.h>/ { found = 1; exit }
+    /^[ \t]*#[ \t]*(define|undef|if|ifdef|ifndef|elif|else|endif|import)/ { exit }
+    END { exit !found }' "$1"
+}
+
+# Build (once) a precompiled <bits/stdc++.h> for these exact flags; prints its path.
+# shellcheck disable=SC2086
+build_pch() {
+  cxx="$1"; pflags="$2"; inc="$3"
+  dir="$CACHE/pch"; mkdir -p "$dir" || return 1
+  key="$(printf '%s|%s|%s|%s' "$cxx" "$pflags" "$inc" "$VERSION" | cksum | cut -d' ' -f1)"
+  pch="$dir/stdc-$key.pch"
+  if [ ! -f "$pch" ]; then
+    printf '#include <bits/stdc++.h>\n' > "$dir/stdc-$key.h"
+    note "[precompiling <bits/stdc++.h> once for these flags; later compiles get faster]"
+    if ! $cxx $pflags ${inc:+"-I$inc"} -x c++-header "$dir/stdc-$key.h" -o "$pch.tmp.$$" 2>/dev/null; then
+      rm -f "$pch.tmp.$$"; return 1
+    fi
+    mv -f "$pch.tmp.$$" "$pch" || return 1
+  fi
+  echo "$pch"
+}
+
+# Has anything this binary was built from changed? ($exe.d is the compiler's
+# dependency list; $exe.sum the source's checksum, which catches edits within
+# the same second and files swapped in with older timestamps.)
+needs_build() {
+  [ -x "$exe" ] && [ -f "$exe.d" ] && [ "$(cat "$exe.sum" 2>/dev/null)" = "$(cksum < "$src")" ] || return 0
+  awk '{ sub(/\\$/, ""); if (NR == 1) sub(/^[^:]*: */, ""); gsub(/\\ /, "\001")
+         n = split($0, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") { gsub("\001", " ", a[i]); print a[i] } }' "$exe.d" |
+    { while IFS= read -r f; do { [ -e "$f" ] && [ ! "$f" -nt "$exe" ]; } || exit 0; done; exit 1; }
 }
 
 # ---------------------------------------------------------------------------
 cmd_run() {
-  std="c++17"; debug=0; opt="-O2"; src=""
+  std="c++17"; debug=0; opt="-O2"; src=""; pch=1; stats=""
+  [ -n "${CPMAC_NO_PCH:-}" ] && pch=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      -s|--std) std="$2"; shift 2 ;;
+      -s|--std) [ $# -ge 2 ] || die "$1 needs a value, e.g. $1 c++20"; std="$2"; shift 2 ;;
       --std=*|-std=*) std="${1#*=}"; shift ;;
       -d|--debug) debug=1; shift ;;
       -O0|-O1|-O2|-O3|-Os|-Ofast) opt="$1"; shift ;;
+      --no-pch) pch=0; shift ;;
+      -t|--stats) stats=1; shift ;;
+      -q|--quiet) stats=0; shift ;;
       -h|--help) usage_run; return 0 ;;
-      --) shift; break ;;
+      --) shift; [ $# -gt 0 ] && { src="$1"; shift; }; break ;;
       -*) die "unknown option $1 (see: cprun --help)" ;;
       *) src="$1"; shift; break ;;
     esac
   done
   [ -n "$src" ] || { usage_run; return 2; }
   [ -f "$src" ] || die "no such file: $src"
+  update_notice
 
-  cxx="$(pick_cxx)"
+  cxx="$(pick_cxx)" || exit 1
   flags="-std=$std $opt -Wall -Wextra -Wshadow -DLOCAL"
   [ "$debug" = 1 ] && flags="-std=$std -O1 -g -Wall -Wextra -Wshadow -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer"
-  finds_headers "$cxx" || flags="$flags -I$(include_dir)"
+  flags="$flags ${CPMAC_FLAGS:-}"
+  inc=""
+  finds_headers "$cxx" || { inc="$(include_dir)"; link_hint; }
   # Default stack is 8 MB on macOS; judges usually give 256 MB. Deep DFS on
   # 1e5-1e6 nodes segfaults locally without this.
-  [ "$(uname -s)" = Darwin ] && flags="$flags -Wl,-stack_size,0x10000000"
-  flags="$flags ${CPMAC_FLAGS:-}"
+  ldflags=""
+  [ "$(uname -s)" = Darwin ] && ldflags="-Wl,-stack_size,0x10000000"
+  color=""
+  is_clang "$cxx" && [ -t 2 ] && color="-fcolor-diagnostics"
 
-  mkdir -p "$CACHE"
-  abs="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
-  key="$(printf '%s|%s|%s' "$abs" "$cxx" "$flags" | cksum | cut -d' ' -f1)"
-  exe="$CACHE/$(basename "$src" | sed 's/\.[^.]*$//')-$key"
+  mkdir -p "$CACHE" || die "can't create $CACHE"
+  abs="$(CDPATH='' cd -- "$(dirname -- "$src")" && pwd)/$(basename -- "$src")"
+  key="$(printf '%s|%s|%s|%s|%s|%s' "$abs" "$cxx" "$flags" "$inc" "$ldflags" "$VERSION" | cksum | cut -d' ' -f1)"
+  exe="$CACHE/$(basename -- "$src" | sed 's/\.[^.]*$//')-$key"
 
-  if [ ! -x "$exe" ] || [ "$src" -nt "$exe" ]; then
-    printf '%s[compiling %s with %s]%s\n' "$D" "$src" "$cxx" "$N" >&2
+  if needs_build; then
+    pchfile=""
+    if [ "$pch" = 1 ] && is_clang "$cxx" && pch_ok "$src"; then
+      pchfile="$(build_pch "$cxx" "$flags" "$inc")" || pchfile=""
+    fi
+    note "[compiling $src with ${cxx}${pchfile:+, precompiled header}]"
+    # Build to a temp name and rename: replacing a binary that another cprun is
+    # running gets that process killed on macOS.
+    tmp="$exe.tmp.$$"
     # shellcheck disable=SC2086
-    "$cxx" $flags "$src" -o "$exe" || exit 1
+    $cxx $flags $color ${inc:+"-I$inc"} ${pchfile:+-include-pch} ${pchfile:+"$pchfile"} \
+      -MMD -MT cpmac -MF "$tmp.d" "$src" -o "$tmp" $ldflags 2>"$tmp.err"
+    status=$?
+    if [ "$status" -ne 0 ] && [ -n "$pchfile" ] && grep -qiE 'precompiled header|PCH file' "$tmp.err"; then
+      rm -f "$pchfile"   # stale (e.g. the SDK changed): retry without it
+      # shellcheck disable=SC2086
+      $cxx $flags $color ${inc:+"-I$inc"} -MMD -MT cpmac -MF "$tmp.d" "$src" -o "$tmp" $ldflags 2>"$tmp.err"
+      status=$?
+    fi
+    cat "$tmp.err" >&2
+    if [ "$status" -ne 0 ]; then rm -f "$tmp" "$tmp.d" "$tmp.err"; exit 1; fi
+    mv -f "$tmp" "$exe" && mv -f "$tmp.d" "$exe.d" && cksum < "$src" > "$exe.sum"
+    rm -f "$tmp.err"
   fi
+
   # shellcheck disable=SC3045
   [ "$(uname -s)" = Darwin ] || ulimit -s unlimited 2>/dev/null || true
-  "$exe" "$@"
-  code=$?
-  [ "$code" -ne 0 ] && printf '%s[exited with code %d]%s\n' "$Y" "$code" "$N" >&2
+  [ -z "$stats" ] && { [ -t 2 ] && stats=1 || stats=0; }
+  if [ "$stats" = 1 ] && [ -x /usr/bin/time ]; then
+    tfile="$exe.time.$$"
+    if [ "$(uname -s)" = Darwin ]; then /usr/bin/time -l -o "$tfile" "$exe" "$@"; else /usr/bin/time -f '%U %S %M' -o "$tfile" "$exe" "$@"; fi
+    code=$?
+    if [ "$(uname -s)" = Darwin ]; then
+      line="$(awk '/ real /{t = $3 + $5} /maximum resident set size/{m = $1 / 1048576} END {if (t != "") printf "%.2f s CPU, %.1f MB", t, m}' "$tfile" 2>/dev/null)"
+    else
+      line="$(awk 'NF == 3 && $1 ~ /^[0-9.]+$/ {printf "%.2f s CPU, %.1f MB", $1 + $2, $3 / 1024}' "$tfile" 2>/dev/null)"
+    fi
+    rm -f "$tfile"
+    [ -n "$line" ] && printf '%s[%s%s]%s\n' "$ED" "$line" "$( [ "$debug" = 1 ] && echo ', debug build: slower and bigger than on a judge')" "$EN" >&2
+  else
+    "$exe" "$@"
+    code=$?
+  fi
+  [ "$code" -ne 0 ] && printf '%s[exited with code %d%s]%s\n' "$EY" "$code" "$(signal_name "$code")" "$EN" >&2
   return "$code"
+}
+
+signal_name() {
+  case "$1" in
+    134) echo ": aborted, e.g. a failed assert or a -d check" ;;
+    136) echo ": arithmetic error, e.g. division by zero" ;;
+    137) echo ": killed" ;;
+    138|139) echo ": crashed, e.g. out-of-bounds access, null pointer or stack overflow" ;;
+  esac
 }
 
 usage_run() {
@@ -99,23 +278,27 @@ Usage: cprun [options] file.cpp [program args...]   (same as: cp-mac run)
 Compiles (only if the file changed) and runs a CP solution:
   -std=c++17, -O2, -Wall -Wextra -Wshadow, -DLOCAL, and on macOS a 256 MB
   stack so deep recursion doesn't segfault like it does with plain clang++.
+  Prints the CPU time and peak memory afterwards, like a judge would.
 
 Options:
   -s, --std VER    C++ standard (default c++17), e.g. -s c++20
   -d, --debug      debug build: -D_GLIBCXX_DEBUG + AddressSanitizer + UBSan
   -O0 .. -O3       optimisation level (default -O2)
+  -t, --stats      always print time and memory (default: only on a terminal)
+  -q, --quiet      never print them
+  --no-pch         don't use a precompiled <bits/stdc++.h>
 
 Examples:
   cprun a.cpp < in.txt
   cprun -d a.cpp < in.txt          # catch out-of-bounds, overflow, UB
-  CXX=g++-14 cprun a.cpp           # use another compiler
+  CXX=g++-15 cprun a.cpp           # use another compiler
   CPMAC_FLAGS="-DMULTI" cprun a.cpp
 EOF
 }
 
 # ---------------------------------------------------------------------------
 cmd_doctor() {
-  cxx="$(pick_cxx)"
+  cxx="$(pick_cxx)" || exit 1
   printf '%scp-mac %s%s  (%s install, %s)\n\n' "$B" "$VERSION" "$N" "$INSTALL_KIND" "$PREFIX"
   echo "${B}System${N}"
   ok "$(uname -s) $(uname -r) on $(uname -m)"
@@ -123,27 +306,29 @@ cmd_doctor() {
     if xcode-select -p >/dev/null 2>&1; then ok "Command Line Tools: $(xcode-select -p)"
     else bad "Command Line Tools missing. Run: xcode-select --install"; fi
   fi
-  ok "Compiler: $cxx -> $("$cxx" --version 2>&1 | head -1)"
+  # shellcheck disable=SC2086
+  ok "Compiler: $cxx -> $($cxx --version 2>&1 | head -1)"
   if command -v g++ >/dev/null 2>&1 && g++ --version 2>&1 | grep -qi clang; then
     warn "'g++' on this Mac is really Apple Clang (that's normal; cp-mac makes it work)."
   fi
 
   echo; echo "${B}Headers${N}"
+  inc=""
   if finds_headers "$cxx"; then
-    where="$(printf '#include <bits/stdc++.h>\n' | "$cxx" -x c++ -std=c++17 -H -fsyntax-only - 2>&1 | grep 'stdc++.h' | head -1 | sed 's/^\.* //')"
+    where="$(found_header "$cxx")"
     ok "<bits/stdc++.h> found automatically: $where"
     if ! grep -qs cp-mac "$where" 2>/dev/null; then
-      warn "That copy is not cp-mac's (it's an older manual install or GCC's). It may break on newer Clang."
+      if is_clang "$cxx"; then warn "That copy is not cp-mac's (an older manual install?). It may break on newer Clang."
+      else ok "That is the compiler's own copy (real GCC), which is what it should use."; fi
     fi
-    inc=""
   else
-    inc="-I$(include_dir)"
+    inc="$(include_dir)"
     bad "$cxx doesn't find the headers on its own."
     if [ "$INSTALL_KIND" = brew ]; then
-      echo "      Homebrew on Apple Silicon puts headers in ${HOMEBREW_PREFIX:-$(brew --prefix 2>/dev/null || echo /opt/homebrew)}/include,"
+      echo "      Homebrew on Apple Silicon puts headers in ${PREFIX%%/Cellar/*}/include,"
       echo "      which Apple Clang doesn't search. Fix it once with:  ${B}cp-mac link${N}"
     elif [ "$INSTALL_KIND" = script ] && [ "$PREFIX" != /usr/local ]; then
-      echo "      cp-mac was installed with a custom prefix, so add ${B}$inc${N} when compiling"
+      echo "      cp-mac was installed with a custom prefix, so add ${B}-I$inc${N} when compiling"
       echo "      (cprun does this for you), or reinstall into /usr/local to make it automatic."
     else
       echo "      Reinstall with: curl -fsSL https://raw.githubusercontent.com/$CPMAC_REPO/main/install.sh | sh"
@@ -155,7 +340,7 @@ cmd_doctor() {
   check() {  # check <label> <program>
     printf '%s\n' "$2" > "$T/t.cpp"
     # shellcheck disable=SC2086
-    if "$cxx" -std=c++17 $inc "$T/t.cpp" -o "$T/t" >"$T/err" 2>&1 && "$T/t" >/dev/null 2>&1; then ok "$1"
+    if $cxx -std=c++17 ${inc:+"-I$inc"} "$T/t.cpp" -o "$T/t" >"$T/err" 2>&1 && "$T/t" >/dev/null 2>&1; then ok "$1"
     else bad "$1"; sed 's/^/        /' "$T/err" | head -4; fi
   }
   check "#include <bits/stdc++.h>" '#include <bits/stdc++.h>
@@ -176,64 +361,137 @@ using namespace __gnu_cxx; int main(){ rope<int> r; r.push_back(1); r.insert(0, 
 using namespace std; int main(){ vector<int> v{1,2,3}; random_shuffle(v.begin(), v.end()); return (int)count_if(v.begin(), v.end(), bind2nd(less<int>(), 3)) != 2; }'
   rm -rf "$T"
 
+  echo; echo "${B}Updates${N}"
+  if [ "$INSTALL_KIND" = source ]; then
+    ok "Running from a source checkout: update with git pull."
+  elif latest="$(latest_release)"; then
+    if version_gt "$latest" "$VERSION"; then warn "cp-mac ${latest#v} is available (you have $VERSION). Run: cp-mac update"
+    else ok "Up to date (latest release: ${latest#v})."; fi
+  else
+    warn "Couldn't check for updates (offline?)."
+  fi
+  if [ -f "$AGENT_PLIST" ]; then ok "Automatic updates: on (turn off with: cp-mac autoupdate off)"
+  else ok "Automatic updates: off (turn on with: cp-mac autoupdate on)"; fi
+
   if [ "$(uname -s)" = Darwin ]; then
     echo; echo "${B}Tips${N}"
     echo "  - Use ${B}cprun file.cpp${N} to get a 256 MB stack (plain clang++ gives 8 MB; deep DFS crashes)."
     echo "  - long double is 64-bit on Apple Silicon (80-bit on x86 judges): precision can differ."
     echo "  - #pragma GCC target(\"avx2\") does nothing on Apple Silicon; clang just warns."
   fi
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
+# link: Homebrew on Apple Silicon keeps headers in /opt/homebrew/include,
+# which Apple Clang never searches. Link each cp-mac entry into
+# /usr/local/include (which it does search) without touching anything else
+# that lives there.
+
+link_entries() {  # the paths, relative to include/, that link creates
+  src="$1"
+  echo cp-mac
+  for f in "$src"/bits/* "$src"/ext/*; do [ -e "$f" ] && echo "${f#"$src"/}"; done
+}
+
+is_our_link() {  # is_our_link <path>: a symlink pointing into a cp-mac install?
+  [ -L "$1" ] || return 1
+  case "$(readlink "$1")" in "$(include_dir)"/*|*/cp-mac/*) return 0 ;; esac
+  return 1
+}
+
 cmd_link() {
   src="$(include_dir)"
   [ -f "$src/bits/stdc++.h" ] || die "can't find cp-mac headers in $src"
   [ "$src" = "$LINK_DIR" ] && { echo "Headers already live in $LINK_DIR; nothing to link."; return 0; }
-  if finds_headers "$(pick_cxx)"; then
-    echo "The compiler already finds cp-mac's headers (e.g. Homebrew on an Intel Mac); nothing to link."
+  if [ -f "$LINK_DIR/cp-mac/MANIFEST" ] && [ ! -L "$LINK_DIR/cp-mac" ]; then
+    die "a script install of cp-mac already exists in $LINK_DIR. Use one install method: remove it first with  $LINK_DIR/../bin/cp-mac uninstall"
+  fi
+  cxx="$(pick_cxx)" || exit 1
+  # Already done? (Also true on Intel, where Homebrew links into /usr/local itself.)
+  # A hand-copied stdc++.h from somewhere else doesn't count: link moves it aside.
+  if finds_headers "$cxx" && grep -qs cp-mac "$(found_header "$cxx")"; then
+    echo "${G}✓${N} $cxx already finds cp-mac's headers; nothing to do."
     return 0
   fi
-  if [ -f "$LINK_DIR/cp-mac/MANIFEST" ]; then
-    die "a script install of cp-mac already exists in $LINK_DIR. Remove it first: $LINK_DIR/../bin/cp-mac uninstall"
-  fi
+
+  echo "${B}cp-mac link${N}: lets Apple Clang (and your editor) find cp-mac's headers"
+  echo "  without -I flags, by adding links in $LINK_DIR:"
+  for e in $(link_entries "$src"); do echo "    $LINK_DIR/$e ${D}-> $src/$e${N}"; done
+  echo "  They point at Homebrew's stable path, so 'brew upgrade' keeps them working."
   SUDO=""
-  if [ ! -w "$LINK_DIR" ] && [ ! -w "$(dirname "$LINK_DIR")" ]; then SUDO="sudo"; fi
-  [ -n "$SUDO" ] && echo "Linking into $LINK_DIR needs administrator rights; you may be asked for your password."
+  writable "$LINK_DIR/bits" && writable "$LINK_DIR/ext" && writable "$LINK_DIR/cp-mac" || SUDO="sudo"
+  if [ -n "$SUDO" ]; then
+    echo "  $LINK_DIR belongs to the system, so macOS will ask for your password (only this once)."
+    echo
+    sudo -v || die "no administrator rights, nothing was changed."
+  fi
+  echo
+
   $SUDO mkdir -p "$LINK_DIR" || exit 1
-  for d in bits ext cp-mac; do
-    t="$LINK_DIR/$d"
-    if [ -L "$t" ]; then $SUDO rm -f "$t"
-    elif [ -e "$t" ]; then
-      bak="$t.bak-$(date +%Y%m%d%H%M%S)"; $SUDO mv "$t" "$bak"; warn "moved existing $t to $bak"
+  # Older versions linked whole folders; replace those with real folders.
+  for d in bits ext; do
+    if is_our_link "$LINK_DIR/$d"; then $SUDO rm -f "$LINK_DIR/$d"; fi
+    if [ -L "$LINK_DIR/$d" ] || { [ -e "$LINK_DIR/$d" ] && [ ! -d "$LINK_DIR/$d" ]; }; then
+      bak="$LINK_DIR/$d.bak-$(date +%Y%m%d%H%M%S)"; $SUDO mv "$LINK_DIR/$d" "$bak"; warn "moved $LINK_DIR/$d (not a folder) to $bak"
     fi
-    $SUDO ln -s "$src/$d" "$t" && ok "$t -> $src/$d"
+    $SUDO mkdir -p "$LINK_DIR/$d" || exit 1
   done
-  echo "Done. Apple Clang will now find cp-mac's headers. Undo with: cp-mac unlink"
+  for e in $(link_entries "$src"); do
+    t="$LINK_DIR/$e"
+    if is_our_link "$t"; then $SUDO rm -f "$t"
+    elif [ -e "$t" ] || [ -L "$t" ]; then
+      bak="$t.bak-$(date +%Y%m%d%H%M%S)"; $SUDO mv "$t" "$bak"; warn "moved the existing $t to $bak"
+    fi
+    $SUDO ln -s "$src/$e" "$t" || die "could not create $t"
+  done
+
+  if finds_headers "$cxx"; then
+    echo "${G}✓ Done.${N} $cxx now finds <bits/stdc++.h>, pb_ds and rope with no extra flags."
+    echo "  Check everything with: cp-mac doctor      Undo with: cp-mac unlink"
+  else
+    die "linked, but $cxx still doesn't find the headers. Run 'cp-mac doctor' and open an issue with its output."
+  fi
 }
 
 cmd_unlink() {
-  SUDO=""; [ -w "$LINK_DIR" ] || SUDO="sudo"
-  for d in bits ext cp-mac; do
-    t="$LINK_DIR/$d"
-    if [ -L "$t" ] && readlink "$t" | grep -q 'cp-mac'; then $SUDO rm -f "$t" && ok "removed $t"; fi
+  found=0
+  for e in bits ext cp-mac bits/stdc++.h bits/extc++.h ext/pb_ds ext/rope ext/ropeimpl.h; do
+    is_our_link "$LINK_DIR/$e" && found=1
   done
+  [ "$found" = 1 ] || { echo "No cp-mac links in $LINK_DIR; nothing to undo."; return 0; }
+  SUDO=""
+  writable "$LINK_DIR/bits" && writable "$LINK_DIR/ext" && writable "$LINK_DIR/cp-mac" || SUDO="sudo"
+  [ -n "$SUDO" ] && echo "Removing links from $LINK_DIR needs administrator rights; you may be asked for your password."
+  for e in bits/stdc++.h bits/extc++.h ext/pb_ds ext/rope ext/ropeimpl.h cp-mac bits ext; do
+    t="$LINK_DIR/$e"
+    if is_our_link "$t"; then $SUDO rm -f "$t" && ok "removed $t"; fi
+  done
+  for d in bits ext; do   # folders link created, if now empty
+    [ -d "$LINK_DIR/$d" ] && [ ! -L "$LINK_DIR/$d" ] && $SUDO rmdir "$LINK_DIR/$d" 2>/dev/null
+  done
+  for b in "$LINK_DIR"/*.bak-* "$LINK_DIR"/bits/*.bak-* "$LINK_DIR"/ext/*.bak-*; do
+    [ -e "$b" ] && warn "earlier files that cp-mac moved aside are still at $b"
+  done
+  return 0
 }
 
+# ---------------------------------------------------------------------------
 cmd_uninstall() {
   case "$INSTALL_KIND" in
     brew)
+      autoupdate_off quiet
       cmd_unlink
       echo "Now run: brew uninstall cp-mac" ;;
     script)
       M="$PREFIX/include/cp-mac/MANIFEST"
       [ -f "$M" ] || die "no install manifest at $M"
-      # sudo only if a folder holding our files isn't writable (on Intel
-      # Macs /usr/local is root's but include/ and bin/ are Homebrew's)
+      for d in bits ext cp-mac; do
+        [ -L "$PREFIX/include/$d" ] && die "$PREFIX/include/$d is a link ($(readlink "$PREFIX/include/$d")), not a folder cp-mac installed; not touching it."
+      done
       SUDO=""
-      while IFS= read -r f; do
-        [ -n "$f" ] && [ -d "$(dirname "$PREFIX/$f")" ] && [ ! -w "$(dirname "$PREFIX/$f")" ] && SUDO="sudo"
-      done < "$M"
-      [ -w "$PREFIX/include/cp-mac" ] || SUDO="sudo"
+      prefix_needs_sudo && SUDO="sudo"
+      [ -n "$SUDO" ] && echo "Removing cp-mac from $PREFIX needs administrator rights; you may be asked for your password."
       failed=0
       while IFS= read -r f; do [ -z "$f" ] || $SUDO rm -f "$PREFIX/$f" || failed=1; done < "$M"
       [ "$failed" = 0 ] || die "some files could not be removed (see above); the manifest is kept at $M so you can retry."
@@ -241,17 +499,97 @@ cmd_uninstall() {
       for d in "$PREFIX/include/ext/pb_ds" "$PREFIX/include/cp-mac" "$PREFIX/include/ext" "$PREFIX/include/bits"; do
         [ -d "$d" ] && $SUDO find "$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
       done
+      autoupdate_off quiet
       rm -rf "$CACHE"
       echo "cp-mac uninstalled." ;;
     *) die "running from a source checkout; nothing to uninstall." ;;
   esac
 }
 
+# ---------------------------------------------------------------------------
 cmd_update() {
+  auto=0; [ "${1:-}" = --auto ] && auto=1
   case "$INSTALL_KIND" in
-    brew) brew update && brew upgrade cp-mac ;;
-    script) curl -fsSL "https://raw.githubusercontent.com/$CPMAC_REPO/main/install.sh" | PREFIX="$PREFIX" sh ;;
+    brew)
+      brew_bin="${PREFIX%%/Cellar/*}/bin/brew"
+      [ -x "$brew_bin" ] || brew_bin=brew
+      HOMEBREW_NO_ENV_HINTS=1 "$brew_bin" upgrade paras-ydv/cp/cp-mac ;;
+    script)
+      command -v curl >/dev/null 2>&1 || die "curl is required to update."
+      tag="$(latest_release)" || die "couldn't reach GitHub to check for a new release; try again later."
+      mkdir -p "$CACHE" 2>/dev/null && printf '%s\n' "$tag" > "$CACHE/latest"
+      if ! version_gt "$tag" "$VERSION"; then echo "cp-mac $VERSION is the latest release."; return 0; fi
+      if [ "$auto" = 1 ] && prefix_needs_sudo; then
+        echo "$(date): cp-mac ${tag#v} is available, but updating $PREFIX needs your password. Run: cp-mac update"
+        return 1
+      fi
+      echo "Updating cp-mac $VERSION -> ${tag#v}"
+      t="$(mktemp -d)" || exit 1
+      if ! curl -fsSL -m 60 "https://raw.githubusercontent.com/$CPMAC_REPO/$tag/install.sh" -o "$t/install.sh"; then
+        rm -rf "$t"; die "download failed; nothing was changed."
+      fi
+      (cd "$t" && sh ./install.sh --prefix "$PREFIX" --ref "$tag"); r=$?
+      rm -rf "$t"; return "$r" ;;
     *) die "running from a source checkout; use git pull." ;;
+  esac
+}
+
+# Opt-in daily background updates (macOS launchd). Works without a password
+# for Homebrew installs and for script installs in a folder you own.
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+autoupdate_off() {
+  [ -f "$AGENT_PLIST" ] || { [ "${1:-}" = quiet ] || echo "Automatic updates are already off."; return 0; }
+  launchctl bootout "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || launchctl unload "$AGENT_PLIST" 2>/dev/null
+  rm -f "$AGENT_PLIST"
+  [ "${1:-}" = quiet ] || echo "Automatic updates are off. You'll still see a one-line notice when a new version is out."
+}
+
+cmd_autoupdate() {
+  [ "$(uname -s)" = Darwin ] || die "automatic updates use macOS launchd. On Linux, add a daily cron job: 0 12 * * * $PREFIX/bin/cp-mac update --auto"
+  case "${1:-status}" in
+    on)
+      [ "$INSTALL_KIND" != source ] || die "running from a source checkout; use git pull."
+      if [ "$INSTALL_KIND" = script ] && prefix_needs_sudo; then
+        die "cp-mac in $PREFIX can only be changed with your password, so it can't update itself in the background.
+  You'll still get a one-line notice when a new version is out; then run: cp-mac update"
+      fi
+      bin="$PREFIX/bin/cp-mac"
+      [ "$INSTALL_KIND" = brew ] && bin="${PREFIX%%/Cellar/*}/bin/cp-mac"
+      mkdir -p "$(dirname "$AGENT_PLIST")" "$CACHE" || exit 1
+      cat > "$AGENT_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$AGENT_LABEL</string>
+  <key>ProgramArguments</key>
+  <array><string>$(xml_escape "$bin")</string><string>update</string><string>--auto</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$(xml_escape "${PREFIX%%/Cellar/*}/bin"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>StartInterval</key><integer>86400</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>StandardOutPath</key><string>$(xml_escape "$CACHE/autoupdate.log")</string>
+  <key>StandardErrorPath</key><string>$(xml_escape "$CACHE/autoupdate.log")</string>
+</dict>
+</plist>
+EOF
+      launchctl bootout "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null
+      launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || launchctl load -w "$AGENT_PLIST" 2>/dev/null ||
+        { rm -f "$AGENT_PLIST"; die "launchctl refused the background job; nothing was changed."; }
+      echo "${G}✓${N} Automatic updates are on: cp-mac checks once a day and installs new releases."
+      echo "  Log: $CACHE/autoupdate.log      Turn off with: cp-mac autoupdate off" ;;
+    off) autoupdate_off ;;
+    status)
+      if [ -f "$AGENT_PLIST" ]; then
+        echo "Automatic updates are on (daily). Log: $CACHE/autoupdate.log"
+        [ -f "$CACHE/autoupdate.log" ] && tail -3 "$CACHE/autoupdate.log" | sed 's/^/  /'
+      else
+        echo "Automatic updates are off. Turn on with: cp-mac autoupdate on"
+      fi ;;
+    *) die "usage: cp-mac autoupdate [on|off|status]" ;;
   esac
 }
 
@@ -261,20 +599,21 @@ cp-mac $VERSION: GCC-style competitive programming on Apple Clang
 
 Usage: cp-mac <command>
 
-  run FILE.cpp   compile & run with CP flags and a big stack (alias: cprun)
-  doctor         check that everything works and explain what doesn't
-  link           (Homebrew on Apple Silicon) make Apple Clang find the headers
-  unlink         undo 'link'
-  update         update cp-mac
-  uninstall      remove cp-mac
-  version        print the version
+  run FILE.cpp      compile & run with CP flags and a big stack (alias: cprun)
+  doctor            check that everything works and explain what doesn't
+  link              (Homebrew on Apple Silicon) make Apple Clang find the headers
+  unlink            undo 'link'
+  update            install the latest release
+  autoupdate on|off install new releases automatically once a day (macOS)
+  uninstall         remove cp-mac
+  version           print the version
 
 https://github.com/$CPMAC_REPO
 EOF
 }
 
 # ---------------------------------------------------------------------------
-case "$(basename "$0")" in
+case "$(basename -- "$0")" in
   cprun) cmd_run "$@"; exit $? ;;
 esac
 
@@ -284,9 +623,10 @@ case "$cmd" in
   doctor) cmd_doctor ;;
   link) cmd_link ;;
   unlink) cmd_unlink ;;
-  update|upgrade) cmd_update ;;
+  update|upgrade) cmd_update "$@" ;;
+  autoupdate) cmd_autoupdate "$@" ;;
   uninstall) cmd_uninstall ;;
-  version|--version|-v) echo "cp-mac $VERSION" ;;
+  version|--version|-v) echo "cp-mac $VERSION"; update_notice ;;
   help|--help|-h) usage ;;
   *) usage >&2; exit 2 ;;
 esac
