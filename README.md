@@ -193,4 +193,4 @@ Found GCC-only code that still doesn't compile on your Mac? Open an issue with t
 
 ## License
 
-cp-mac's own code is [MIT](LICENSE). The pb_ds and rope headers in `include/ext/` are GCC's, under GPLv3+ with the GCC Runtime Library Exception, the same terms GCC ships them under. See [NOTICE](NOTICE) and [third_party/gcc](third_party/gcc/).
+cp-mac's own code is [MIT](LICENSE). The pb_ds and rope headers in `include/ext/` (and `include/cp-mac/rope_support.h`, which supports rope) are GCC's, under GPLv3+ with the GCC Runtime Library Exception, the same terms GCC ships them under. Programs you compile with them carry no license obligations, as with GCC itself. See [NOTICE](NOTICE) and [third_party/gcc](third_party/gcc/).

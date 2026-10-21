@@ -3,7 +3,10 @@
 // compile with Clang + libc++. scripts/vendor-gcc.sh points the rope
 // sources at the __cpmac_rope:: names below.
 //
-// Part of cp-mac (MIT License).
+// Part of cp-mac. Some helpers here follow libstdc++'s own implementations,
+// so, like the rope headers that use it, this file is under the GNU GPL v3
+// or later with the GCC Runtime Library Exception 3.1 (see third_party/gcc/).
+// SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1
 #pragma GCC system_header
 
 #ifndef CPMAC_ROPE_SUPPORT_H
