@@ -312,8 +312,7 @@ namespace __gnu_pbds
     typedef typename base_type::const_reference 	const_reference;
     typedef typename base_type::const_pointer 		const_pointer;
 
-    typedef typename _Alloc::template rebind<metadata_type> __rebind_m;
-    typedef typename __rebind_m::other 			__rebind_ma;
+    typedef detail::rebind_traits<_Alloc, metadata_type> __rebind_ma;
     typedef typename __rebind_ma::const_reference      metadata_const_reference;
     typedef typename __rebind_ma::reference 		metadata_reference;
 

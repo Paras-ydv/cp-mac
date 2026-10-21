@@ -61,8 +61,17 @@ find "$EXT/pb_ds" -type f -print0 | xargs -0 perl -0pi -e '
   s{#\s*include\s*<tr1/functional>}{#include <functional>}g;
 '
 
-# typelist.hpp: move it out of namespace __gnu_cxx
+# trie_order_statistics_node_update: allocator rebind<> is deprecated in
+# C++17 and gone in C++20; use pb_ds' own rebind_traits like the rest of pb_ds.
 perl -0pi -e '
+  s{typedef typename _Alloc::template rebind<metadata_type> __rebind_m;\n\s*typedef typename __rebind_m::other\s+__rebind_ma;}{typedef detail::rebind_traits<_Alloc, metadata_type> __rebind_ma;}g;
+' "$EXT/pb_ds/trie_policy.hpp"
+
+# typelist.hpp: move it out of namespace __gnu_cxx, and give it its own
+# include guard (GCC's <ext/typelist.h> uses _TYPELIST_H; both can meet when
+# real GCC is pointed at cp-mac's headers with -I).
+perl -0pi -e '
+  s{\b_TYPELIST_H\b}{CPMAC_PBDS_TYPELIST_HPP}g;
   s{namespace __gnu_cxx\b}{namespace __cpmac}g;
   s{__gnu_cxx::}{__cpmac::}g;
 ' "$PRIV/typelist.hpp"
@@ -83,6 +92,7 @@ perl -0pi -e '
   s{(?<![\w:])uninitialized_copy_n\(}{__cpmac_rope::uninitialized_copy_n(}g;
   s{(?<![\w:])copy_n\(}{__cpmac_rope::copy_n(}g;
   s{(?<![\w:])lexicographical_compare_3way\(}{__cpmac_rope::lexicographical_compare_3way(}g;
+  s{(?<![\w:])power\(}{__cpmac_rope::__power(}g;          # SGI <ext/numeric>, used by rope(n, c)
   s{(?<![\w:])__alloc_traits<}{__cpmac_rope::__alloc_traits<}g;
   s{std::__throw_length_error\b}{__cpmac_rope::__throw_length_error}g;
   s{std::binary_function\b}{__cpmac_rope::binary_function}g;

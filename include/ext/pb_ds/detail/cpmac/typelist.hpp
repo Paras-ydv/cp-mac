@@ -43,8 +43,8 @@
  *  Typelists are an idea by Andrei Alexandrescu.
  */
 
-#ifndef _TYPELIST_H
-#define _TYPELIST_H 1
+#ifndef CPMAC_PBDS_TYPELIST_HPP
+#define CPMAC_PBDS_TYPELIST_HPP 1
 
 #include <cp-mac/libstdcxx_compat.h>
 

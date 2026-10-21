@@ -16,6 +16,8 @@ INC="-Iinclude"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 FLAGS="-O2 -Wall -Wextra -Wshadow -Werror -Wno-deprecated-declarations"
+# GCC 16 reports a false -Warray-bounds inside its own pb_ds trie code at -O2.
+$CXX --version 2>/dev/null | grep -qi clang || FLAGS="$FLAGS -Wno-array-bounds"
 pass=0; fail=0
 
 supports() {
@@ -46,7 +48,18 @@ for std in c++11 c++14 c++17 c++20 c++23 c++2b c++26 c++2c; do
   run stdc "$std" tests/stdc.cpp
   run extc "$std" tests/extc.cpp
   run rope "$std" tests/rope.cpp
+  run gcc-compat "$std" tests/gcc_compat.cpp
+  run order "$std" tests/include_order.cpp
 done
+
+# precompiling <bits/stdc++.h> itself (what cprun does with clang) must be warning-free
+if ! $CXX --version 2>/dev/null | grep -qi clang; then :
+elif $CXX -std=c++17 $FLAGS $INC -x c++-header "${INC:+include/}bits/stdc++.h" -o "$OUT/s.pch" >"$OUT/log" 2>&1 || \
+   { [ -z "$INC" ] && echo '#include <bits/stdc++.h>' | $CXX -std=c++17 $FLAGS -x c++-header - -o "$OUT/s.pch" >"$OUT/log" 2>&1; }; then
+  printf '  ok    %-12s %s\n' pch "precompiled header builds with -Werror"; pass=$((pass + 1))
+else
+  printf '  FAIL  %-12s %s\n' pch "precompiled header"; fail=$((fail + 1)); sed 's/^/        /' "$OUT/log" | head -8
+fi
 
 # with exceptions disabled
 run pbds-noexc c++17 tests/pbds.cpp -fno-exceptions

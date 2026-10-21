@@ -11,7 +11,19 @@
 
 // Apple Clang adds /usr/local/include with -I (not -isystem), so mark this
 // as a system header to keep -Wall/-Wpedantic warnings out of user builds.
+// (Not when it is itself the file being compiled, e.g. into a precompiled
+// header: there the pragma only produces a warning.)
+#if __INCLUDE_LEVEL__ > 0
 #pragma GCC system_header
+#endif
+
+#ifndef __cplusplus
+#error "<bits/stdc++.h> is a C++ header: compile with clang++ or g++, not clang or gcc."
+// Real GCC has its own <bits/stdc++.h>; use it. (This copy is only seen
+// first when cp-mac's include folder is passed with -I, e.g. Homebrew's.)
+#elif defined(__GNUC__) && !defined(__clang__)
+#include_next <bits/stdc++.h>
+#else
 
 #ifndef __has_include
   #error "This header needs a compiler with __has_include (GCC 5+, any Clang)."
@@ -22,6 +34,7 @@
 #include <cp-mac/prelude.h>
 
 // ---------- C headers (C++ wrappers) ----------
+#include <cmath>   // before <cfloat>: Homebrew LLVM 22 + macOS 27 SDK lose INFINITY otherwise
 #include <cassert>
 #include <cctype>
 #include <cerrno>
@@ -88,6 +101,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#if __has_include(<codecvt>)
+#include <codecvt>
+#endif
 #include <condition_variable>
 #include <forward_list>
 #include <future>
@@ -212,7 +228,24 @@
 #endif
 
 
+// ---------- C++26 ----------
+#if __cplusplus > 202302L
+#if __has_include(<debugging>)
+#include <debugging>
+#endif
+#if __has_include(<inplace_vector>)
+#include <inplace_vector>
+#endif
+#if __has_include(<linalg>)
+#include <linalg>
+#endif
+#if __has_include(<text_encoding>)
+#include <text_encoding>
+#endif
+#endif
+
 // GCC extensions CP code expects (std::__gcd, std::__lg, ...) on libc++.
 #include <cp-mac/gnu_extensions.h>
 
+#endif // C / real GCC / everything else
 #endif // CPMAC_BITS_STDCXX_H

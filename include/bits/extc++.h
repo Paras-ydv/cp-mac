@@ -2,10 +2,17 @@
 // everything in <bits/stdc++.h> plus the policy-based data structures
 // and rope.
 // Part of cp-mac: https://github.com/Paras-ydv/cp-mac (MIT License)
+#if __INCLUDE_LEVEL__ > 0
 #pragma GCC system_header
+#endif
 
 #ifndef CPMAC_BITS_EXTCXX_H
 #define CPMAC_BITS_EXTCXX_H
+
+// Real GCC: use its own (see <bits/stdc++.h>).
+#if defined(__GNUC__) && !defined(__clang__)
+#include_next <bits/extc++.h>
+#else
 
 #include <bits/stdc++.h>
 
@@ -19,4 +26,5 @@
 #include <ext/pb_ds/trie_policy.hpp>
 #include <ext/rope>
 
+#endif // real GCC
 #endif // CPMAC_BITS_EXTCXX_H

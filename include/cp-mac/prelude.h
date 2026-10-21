@@ -11,7 +11,11 @@
 // ---- Keep old-but-common CP code compiling on C++17 and later ------------
 // libstdc++ only deprecates these; libc++ deletes them, turning lots of
 // older templates and editorials into compile errors on a Mac.
-#ifndef CPMAC_NO_REMOVED_FEATURES
+// Only safe before libc++ has been read at all: switching these on halfway
+// leaves libc++ inconsistent (hard errors in <memory> at C++23). So with
+// another standard header first, they stay off. cprun always puts this
+// file first (-include), which avoids that.
+#if !defined(CPMAC_NO_REMOVED_FEATURES) && !defined(_LIBCPP_VERSION)
 # ifndef _LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE
 #  define _LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE          // std::random_shuffle
 # endif
@@ -23,6 +27,25 @@
 # endif
 # ifndef _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR
 #  define _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR                // std::auto_ptr
+# endif
+// removed again in C++20; GCC still has them
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS                // not1, not2
+# endif
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS             // result_of, is_literal_type
+# endif
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_UNCAUGHT_EXCEPTION
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_UNCAUGHT_EXCEPTION      // std::uncaught_exception
+# endif
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS         // less<int>::first_argument_type etc.
+# endif
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_RAW_STORAGE_ITERATOR
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_RAW_STORAGE_ITERATOR
+# endif
+# ifndef _LIBCPP_ENABLE_CXX20_REMOVED_TEMPORARY_BUFFER
+#  define _LIBCPP_ENABLE_CXX20_REMOVED_TEMPORARY_BUFFER        // get_temporary_buffer
 # endif
 #endif
 
@@ -43,6 +66,12 @@
 #   else
 #    define _LIBCPP_HARDENING_MODE _LIBCPP_HARDENING_MODE_EXTENSIVE
 #   endif
+#  endif
+# elif (defined(__apple_build_version__) && __clang_major__ < 14) || \
+       (!defined(__apple_build_version__) && __clang_major__ < 15)
+   // libc++ 14 and older: assertions are switched on via _LIBCPP_DEBUG=0
+#  ifndef _LIBCPP_DEBUG
+#   define _LIBCPP_DEBUG 0
 #  endif
 # else
 #  ifndef _LIBCPP_ENABLE_ASSERTIONS

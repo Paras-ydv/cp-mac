@@ -1592,7 +1592,7 @@ __CPMAC_BEGIN_NAMESPACE_VERSION
 	  if (1 == __exponent)
 	    __result = __base_rope;
 	  else
-	    __result = power(__base_rope, __exponent,
+	    __result = __cpmac_rope::__power(__base_rope, __exponent,
 			     _Rope_Concat_fn<_CharT, _Alloc>());
 
 	  if (0 != __remainder)

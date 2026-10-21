@@ -159,6 +159,24 @@ namespace __cpmac_rope
       return -1;
     }
 
+  // SGI's power(x, n, op): x op x op ... op x (n times, n >= 1), by repeated
+  // squaring. rope(n, c) builds long ropes this way; it only calls it with n >= 2.
+  template<typename _Tp, typename _Integer, typename _Op>
+    _Tp
+    __power(_Tp __x, _Integer __n, _Op __op)
+    {
+      for (; (__n & 1) == 0; __n >>= 1)
+        __x = __op(__x, __x);
+      _Tp __acc = __x;
+      for (__n >>= 1; __n != 0; __n >>= 1)
+        {
+          __x = __op(__x, __x);
+          if ((__n & 1) != 0)
+            __acc = __op(__acc, __x);
+        }
+      return __acc;
+    }
+
   // std::__throw_length_error
   [[noreturn]] inline void
   __throw_length_error(const char* __s)

@@ -10,6 +10,9 @@
 #ifndef CPMAC_LIBSTDCXX_COMPAT_H
 #define CPMAC_LIBSTDCXX_COMPAT_H
 
+// pb_ds / rope included before <bits/stdc++.h>: still apply the prelude.
+#include <cp-mac/prelude.h>
+
 #include <cassert>
 #include <climits>
 #include <cstddef>
