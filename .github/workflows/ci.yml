@@ -78,10 +78,20 @@ jobs:
 
       - name: Uninstall leaves nothing behind
         run: |
-          cp-mac uninstall
-          test ! -e /usr/local/include/bits/stdc++.h
-          test ! -e /usr/local/include/ext/rope
-          test ! -e /usr/local/bin/cprun
+          set +e
+          ls -ld /usr/local /usr/local/include /usr/local/bin
+          out="$(cp-mac uninstall 2>&1)"; code=$?
+          echo "$out"
+          [ "$code" -eq 0 ] || echo "::error::cp-mac uninstall exited $code: $(echo "$out" | tr '\n' ' ')"
+          fail=0
+          for f in /usr/local/include/bits/stdc++.h /usr/local/include/bits/extc++.h \
+                   /usr/local/include/ext/rope /usr/local/include/ext/pb_ds \
+                   /usr/local/include/cp-mac /usr/local/bin/cp-mac /usr/local/bin/cprun; do
+            if [ -e "$f" ] || [ -L "$f" ]; then
+              echo "::error::left behind: $(ls -ld "$f")"; fail=1
+            fi
+          done
+          [ "$code" -eq 0 ] && [ "$fail" -eq 0 ]
 
   homebrew:
     name: brew install (${{ matrix.os }})
