@@ -88,7 +88,7 @@ jobs:
         run: |
           set -e
           for i in 1 2 3; do printf 'int main(){ return %d; }\n' "$i" > /tmp/q.cpp; set +e; cprun /tmp/q.cpp; r=$?; set -e; test "$r" = "$i"; done
-          printf '#include <bits/stdc++.h>\nint main(){ std::cout << __lg(1024) << "\\n"; }\n' > /tmp/s.cpp
+          printf '#include <bits/stdc++.h>\nint main(){ std::cout << std::__lg(1024) << "\\n"; }\n' > /tmp/s.cpp
           cprun -t /tmp/s.cpp 2> /tmp/s.err | grep -qx 10
           grep -E '^\[[0-9.]+ s CPU, [0-9.]+ MB\]$' /tmp/s.err
           CXX="env clang++" cprun --no-pch /tmp/s.cpp | grep -qx 10
