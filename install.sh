@@ -40,21 +40,33 @@ ok()   { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
 warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
 die()  { printf '%sx%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
-# Run a command with sudo only when the target isn't writable by us.
+# Use sudo only if some folder we'll write into isn't writable by us.
+# Checks the real target folders, not just $PREFIX: on Intel Macs /usr/local
+# is root's but include/ and bin/ belong to Homebrew's user.
 SUDO=""
-need_sudo() {
+writable() {  # writable <path>: nearest existing ancestor is writable
   d="$1"
-  while [ ! -d "$d" ]; do d="$(dirname "$d")"; done
-  if [ ! -w "$d" ] || { [ -e "$INC" ] && [ ! -w "$INC" ]; } || { [ -e "$BIN" ] && [ ! -w "$BIN" ]; }; then
+  while [ ! -e "$d" ]; do d="$(dirname "$d")"; done
+  [ -w "$d" ]
+}
+need_sudo() {
+  for t in "$INC" "$BIN" "$INC/bits" "$INC/ext" "$INC/ext/pb_ds" "$INC/cp-mac"; do
+    writable "$t" || SUDO="sudo"
+  done
+  if [ -f "$MANIFEST" ]; then  # folders holding files from a previous install
+    while IFS= read -r f; do
+      [ -n "$f" ] && { writable "$(dirname "$PREFIX/$f")" || SUDO="sudo"; }
+    done < "$MANIFEST"
+  fi
+  if [ -n "$SUDO" ]; then
     command -v sudo >/dev/null 2>&1 || die "$PREFIX is not writable and sudo is not available. Try --prefix \$HOME/.local"
-    SUDO="sudo"
-    say "Installing into $PREFIX needs administrator rights; you may be asked for your password."
+    say "Writing to $PREFIX needs administrator rights; you may be asked for your password."
   fi
 }
 
 uninstall() {
   [ -f "$MANIFEST" ] || die "cp-mac doesn't appear to be installed in $PREFIX (no $MANIFEST)."
-  need_sudo "$PREFIX"
+  need_sudo
   say "Removing cp-mac from $PREFIX"
   while IFS= read -r f; do
     [ -n "$f" ] && $SUDO rm -f "$PREFIX/$f"
@@ -89,7 +101,7 @@ fi
 
 VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo dev)"
 say "Installing cp-mac $VERSION into $PREFIX"
-need_sudo "$PREFIX"
+need_sudo
 
 # ---- move aside anything in the way that isn't ours -------------------------
 backup() {  # backup <path>: rename a foreign file/dir to <path>.bak-<date>

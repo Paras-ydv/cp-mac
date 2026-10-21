@@ -227,7 +227,13 @@ cmd_uninstall() {
     script)
       M="$PREFIX/include/cp-mac/MANIFEST"
       [ -f "$M" ] || die "no install manifest at $M"
-      SUDO=""; [ -w "$PREFIX/include" ] && [ -w "$PREFIX/bin" ] || SUDO="sudo"
+      # sudo only if a folder holding our files isn't writable (on Intel
+      # Macs /usr/local is root's but include/ and bin/ are Homebrew's)
+      SUDO=""
+      while IFS= read -r f; do
+        [ -n "$f" ] && [ -d "$(dirname "$PREFIX/$f")" ] && [ ! -w "$(dirname "$PREFIX/$f")" ] && SUDO="sudo"
+      done < "$M"
+      [ -w "$PREFIX/include/cp-mac" ] || SUDO="sudo"
       while IFS= read -r f; do [ -n "$f" ] && $SUDO rm -f "$PREFIX/$f"; done < "$M"
       $SUDO rm -f "$M" "$PREFIX/include/cp-mac/VERSION"
       for d in "$PREFIX/include/ext/pb_ds" "$PREFIX/include/cp-mac" "$PREFIX/include/ext" "$PREFIX/include/bits"; do
