@@ -75,6 +75,22 @@ found_header() {  # the <bits/stdc++.h> used without -I (nothing if it or pb_ds 
   printf '%s\n' "$out" | grep 'stdc++.h' | head -1 | sed 's/^\.* //'
 }
 
+# found_header costs a compile (~0.4 s), so cprun remembers its answer for a
+# day per compiler. A remembered path that has since disappeared (uninstall)
+# is re-checked at once; link/unlink clear the cache because they change it.
+cached_found_header() {
+  key="$(printf '%s|%s|%s' "$1" "$(command -v "${1%% *}")" "$VERSION" | cksum | cut -d' ' -f1)"
+  f="$CACHE/probe-$key"
+  if [ -n "$(find "$f" -mtime -1 2>/dev/null)" ]; then
+    p="$(cat "$f" 2>/dev/null)"
+    if [ "$p" = - ]; then return 0; fi
+    if [ -n "$p" ] && [ -f "$p" ]; then echo "$p"; return 0; fi
+  fi
+  p="$(found_header "$1")"
+  mkdir -p "$CACHE" 2>/dev/null && printf '%s\n' "${p:--}" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f"
+  echo "$p"
+}
+
 real_path() {  # follow symlinks to the real file
   f="$1"
   while [ -L "$f" ]; do
@@ -223,7 +239,7 @@ cmd_run() {
   [ "$debug" = 1 ] && flags="-std=$std -O1 -g -Wall -Wextra -Wshadow -Wno-unknown-pragmas -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer"
   flags="$flags ${CPMAC_FLAGS:-}"
   inc=""
-  found="$(found_header "$cxx")"
+  found="$(cached_found_header "$cxx")"
   [ -n "$found" ] || { inc="$(include_dir)"; link_hint; }
   # With clang, read cp-mac's prelude before anything else, so code that
   # includes <iostream> before <bits/stdc++.h> still gets random_shuffle etc.
@@ -450,6 +466,7 @@ cmd_link() {
   cxx="$(pick_cxx)" || exit 1
   # Already done? (Also true on Intel, where Homebrew links into /usr/local itself.)
   # A hand-copied stdc++.h from somewhere else doesn't count: link moves it aside.
+  rm -f "$CACHE"/probe-* 2>/dev/null
   if finds_headers "$cxx" && grep -qs cp-mac "$(found_header "$cxx")"; then
     echo "${G}✓${N} $cxx already finds cp-mac's headers; nothing to do."
     return 0
@@ -495,6 +512,7 @@ cmd_link() {
 }
 
 cmd_unlink() {
+  rm -f "$CACHE"/probe-* 2>/dev/null
   found=0
   for e in bits ext cp-mac bits/stdc++.h bits/extc++.h ext/pb_ds ext/rope ext/ropeimpl.h; do
     is_our_link "$LINK_DIR/$e" && found=1
