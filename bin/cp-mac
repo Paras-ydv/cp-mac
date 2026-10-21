@@ -75,6 +75,21 @@ found_header() {  # the <bits/stdc++.h> used without -I (nothing if it or pb_ds 
   printf '%s\n' "$out" | grep 'stdc++.h' | head -1 | sed 's/^\.* //'
 }
 
+real_path() {  # follow symlinks to the real file
+  f="$1"
+  while [ -L "$f" ]; do
+    l="$(readlink "$f")"
+    case "$l" in /*) f="$l" ;; *) f="$(dirname "$f")/$l" ;; esac
+  done
+  printf '%s/%s\n' "$(CDPATH='' cd -- "$(dirname -- "$f")" && pwd -P)" "$(basename -- "$f")"
+}
+
+all_installs() {  # every distinct cp-mac on PATH, in PATH order
+  old_ifs="$IFS"; IFS=:
+  for d in $PATH; do [ -x "$d/cp-mac" ] && [ ! -d "$d/cp-mac" ] && real_path "$d/cp-mac"; done | awk '!seen[$0]++'
+  IFS="$old_ifs"
+}
+
 # Can we change $1 (or create it) without sudo?
 writable() {
   d="$1"
@@ -102,9 +117,10 @@ once_a_day() {
 # Updates: find the latest GitHub release. Releases, not commits, so nobody
 # gets a half-finished change in the middle of a contest.
 
-latest_release() {  # prints the latest release tag (e.g. v1.1.0), fails if unknown
+latest_release() {  # prints the latest release tag (e.g. v1.1.0); fails with 1 if
+                    # GitHub can't be reached, 2 if nothing has been released yet
   u="$(curl -fsSIL -m 10 -o /dev/null -w '%{url_effective}' "https://github.com/$CPMAC_REPO/releases/latest" 2>/dev/null)" || return 1
-  case "$u" in */releases/tag/*) echo "${u##*/releases/tag/}" ;; *) return 1 ;; esac
+  case "$u" in */releases/tag/*) echo "${u##*/releases/tag/}" ;; *) return 2 ;; esac
 }
 
 version_gt() {  # version_gt A B: is A newer than B? (dotted numbers)
@@ -324,6 +340,12 @@ cmd_doctor() {
   if command -v g++ >/dev/null 2>&1 && g++ --version 2>&1 | grep -qi clang; then
     warn "'g++' on this Mac is really Apple Clang (that's normal; cp-mac makes it work)."
   fi
+  copies="$(all_installs)"
+  if [ "$(printf '%s\n' "$copies" | grep -c .)" -gt 1 ]; then
+    bad "More than one cp-mac is installed; 'cp-mac' and 'cprun' run the first of these:"
+    printf '%s\n' "$copies" | sed 's/^/        /'
+    echo "      Keep one: 'brew uninstall cp-mac' removes Homebrew's, '<prefix>/bin/cp-mac uninstall' a script install."
+  fi
 
   echo; echo "${B}Headers${N}"
   inc=""
@@ -377,11 +399,14 @@ using namespace std; int main(){ vector<int> v{1,2,3}; random_shuffle(v.begin(),
   echo; echo "${B}Updates${N}"
   if [ "$INSTALL_KIND" = source ]; then
     ok "Running from a source checkout: update with git pull."
-  elif latest="$(latest_release)"; then
-    if version_gt "$latest" "$VERSION"; then warn "cp-mac ${latest#v} is available (you have $VERSION). Run: cp-mac update"
-    else ok "Up to date (latest release: ${latest#v})."; fi
   else
-    warn "Couldn't check for updates (offline?)."
+    latest="$(latest_release)"
+    case $? in
+      0) if version_gt "$latest" "$VERSION"; then warn "cp-mac ${latest#v} is available (you have $VERSION). Run: cp-mac update"
+         else ok "Up to date (latest release: ${latest#v})."; fi ;;
+      2) ok "No cp-mac release published yet; you have the development version $VERSION." ;;
+      *) warn "Couldn't check for updates (offline?)." ;;
+    esac
   fi
   if [ -f "$AGENT_PLIST" ]; then ok "Automatic updates: on (turn off with: cp-mac autoupdate off)"
   else ok "Automatic updates: off (turn on with: cp-mac autoupdate on)"; fi
@@ -529,7 +554,12 @@ cmd_update() {
       HOMEBREW_NO_ENV_HINTS=1 "$brew_bin" upgrade paras-ydv/cp/cp-mac ;;
     script)
       command -v curl >/dev/null 2>&1 || die "curl is required to update."
-      tag="$(latest_release)" || die "couldn't reach GitHub to check for a new release; try again later."
+      tag="$(latest_release)"
+      case $? in
+        0) ;;
+        2) echo "No cp-mac release has been published yet; nothing to update to."; return 0 ;;
+        *) die "couldn't reach GitHub to check for a new release; try again later." ;;
+      esac
       mkdir -p "$CACHE" 2>/dev/null && printf '%s\n' "$tag" > "$CACHE/latest"
       if ! version_gt "$tag" "$VERSION"; then echo "cp-mac $VERSION is the latest release."; return 0; fi
       if [ "$auto" = 1 ] && prefix_needs_sudo; then

@@ -81,6 +81,18 @@ check_no_brew_links() {
   done
 }
 
+# A Homebrew cp-mac that isn't linked leaves no trace in $INC, but its
+# cp-mac / cprun usually come first in PATH, so the copy installed here
+# would be silently shadowed by an older one.
+check_no_brew_install() {
+  for d in ${HOMEBREW_PREFIX:+"$HOMEBREW_PREFIX/opt/cp-mac"} /opt/homebrew/opt/cp-mac /usr/local/opt/cp-mac; do
+    [ -e "$d" ] || continue
+    die "cp-mac is already installed with Homebrew ($d).
+  Use one install method. Either keep Homebrew's (and run 'cp-mac link' once on Apple Silicon),
+  or remove it first with:  brew uninstall cp-mac"
+  done
+}
+
 uninstall() {
   [ -f "$MANIFEST" ] || die "cp-mac doesn't appear to be installed in $PREFIX (no $MANIFEST)."
   check_no_brew_links
@@ -174,6 +186,7 @@ main() {
   VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo dev)"
   say "Installing cp-mac $VERSION into $PREFIX"
   check_no_brew_links
+  check_no_brew_install
   need_sudo
 
   backup "$INC/bits/stdc++.h"
