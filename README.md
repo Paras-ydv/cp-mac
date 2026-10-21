@@ -58,7 +58,7 @@ You need Apple's compiler (`xcode-select --install`), which you most likely alre
 | **pb_ds**: `ordered_set` (`tree` + `find_by_order` / `order_of_key`), `gp_hash_table`, `cc_hash_table`, `trie`, `__gnu_pbds::priority_queue` (with `join` / `modify`) | GCC's real implementation, so behaviour matches the judge |
 | **rope**: `__gnu_cxx::rope`, `crope` | GCC's real implementation; also usable as an `unordered_set` key |
 | `std::__gcd`, `std::__lg` | `__gcd` gives the same results as GCC, including signs; `__lg` is `constexpr` |
-| `random_shuffle`, `unary_function`, `binary_function`, `bind1st`, `bind2nd`, `ptr_fun`, `auto_ptr` in C++17/20 | GCC only deprecates these; Apple's library deletes them |
+| `random_shuffle`, `unary_function`, `binary_function`, `bind1st`, `bind2nd`, `ptr_fun`, `auto_ptr`, `not1`, `result_of` in C++17 and later | GCC only deprecates these; Apple's library deletes them |
 | `using namespace __gnu_cxx;` | No longer an error |
 | `-D_GLIBCXX_DEBUG` | Turns on libc++'s bounds checks, like GCC's debug mode |
 | `cprun` | Compile and run with CP flags, a **256 MB stack**, a precompiled `bits/stdc++.h` and a time/memory report |
@@ -141,7 +141,10 @@ cp-mac 1.1.0 is available (you have 1.0.0). Update with: cp-mac update
 cp-mac can't change the hardware:
 
 - **`long double`** is 64-bit on Apple Silicon (same as `double`), but 80-bit on x86 judges. Precision-sensitive answers can differ.
-- **`#pragma GCC target("avx2")` / `optimize`** do nothing with Clang (you'll see a warning); AVX doesn't exist on Apple Silicon.
+- **`#pragma GCC target("avx2")` / `optimize`** do nothing with Clang (plain `clang++ -Wall` warns about them; `cprun` doesn't). AVX doesn't exist on Apple Silicon.
+- **`bitset::_Find_first()` / `_Find_next()`** are GCC-only members and can't be added to Apple's `std::bitset`. Loop with `b[i]`, or keep the bits in `unsigned long long` words and use `__builtin_ctzll`.
+- **`__float128`** isn't supported by Clang on macOS.
+- **Include `<bits/stdc++.h>` first.** It has to switch some things on before any other standard header is read. If `<iostream>` (say) comes first, `random_shuffle` and friends are missing at C++17+ and `-D_GLIBCXX_DEBUG` checks nothing. `cprun` takes care of this for you either way.
 - pb_ds's own internal debug checks stay off under `-D_GLIBCXX_DEBUG`; the standard containers are still checked.
 
 ## How it works
@@ -149,7 +152,7 @@ cp-mac can't change the hardware:
 - `include/bits/stdc++.h` includes every standard header your compiler actually has, by checking with `__has_include`. Before that, it enables libc++'s compatibility switches for removed C++98 helpers.
 - `include/ext/` is **GCC's own pb_ds and rope source**, run through [`scripts/vendor-gcc.sh`](scripts/vendor-gcc.sh). The script mechanically swaps libstdc++-internal names for small standard-library-based stand-ins in `include/cp-mac/`. No data structure code is rewritten, so behaviour matches GCC.
 - The install script puts everything into `/usr/local/include`, which Apple Clang searches out of the box. Homebrew on Apple Silicon installs into `/opt/homebrew/include` instead, and `cp-mac link` adds links to it from `/usr/local/include` (one per cp-mac file, nothing else in that folder is touched; `brew upgrade` keeps them working).
-- If you also use real GCC (`g++-14` from Homebrew), it keeps using its own headers; cp-mac doesn't interfere.
+- If you also use real GCC (`g++-15` from Homebrew), it keeps using its own `<bits/stdc++.h>`, even if cp-mac's folder is on its include path.
 
 CI runs the full test suite on real macOS 15 and 26, on both Apple Silicon and Intel, plus the oldest Xcode GitHub offers (16.0), Linux with clang + libc++, and GCC. It runs on every change and every week, so breakage from new Xcode versions shows up quickly.
 
