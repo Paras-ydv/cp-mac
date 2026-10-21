@@ -272,6 +272,8 @@ cmd_run() {
   # shellcheck disable=SC3045
   [ "$(uname -s)" = Darwin ] || ulimit -s unlimited 2>/dev/null || true
   [ -z "$stats" ] && { [ -t 2 ] && stats=1 || stats=0; }
+  # Input from the keyboard: a program waiting on cin looks stuck otherwise.
+  [ -t 0 ] && [ -t 2 ] && note "[running; if it reads input, type it and press Ctrl+D when done]"
   if [ "$stats" = 1 ] && [ -x /usr/bin/time ]; then
     tfile="$exe.time.$$"
     if [ "$(uname -s)" = Darwin ]; then /usr/bin/time -l -o "$tfile" "$exe" "$@"; else /usr/bin/time -f '%U %S %M' -o "$tfile" "$exe" "$@"; fi
