@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly: catch breakage from new Xcode / runner images
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcode-select -p
+          clang++ --version
+
+      - name: Tests against the checkout (Apple Clang)
+        run: CXX=clang++ tests/run.sh
+
+      - name: Plain clang++ really can't do this without cp-mac
+        run: |
+          printf '#include <bits/stdc++.h>\nint main(){}\n' > /tmp/plain.cpp
+          if clang++ -std=c++17 -fsyntax-only /tmp/plain.cpp 2>/dev/null; then
+            echo "::notice::this runner already finds a bits/stdc++.h on its own"
+          else
+            echo "confirmed: stock Apple Clang has no bits/stdc++.h"
+          fi
+
+      - name: Install with install.sh into /usr/local
+        run: ./install.sh
+
+      - name: Tests against the installed copy (no -I flags)
+        run: CXX=clang++ tests/run.sh --installed
+
+      - name: g++ (which is Apple Clang on macOS) works too
+        run: CXX=g++ tests/run.sh --installed
+
+      - name: Real GCC from Homebrew still uses its own headers
+        run: |
+          for g in g++-15 g++-14 g++-13; do
+            if command -v "$g" >/dev/null; then
+              printf '#include <bits/stdc++.h>\nint main(){}\n' | "$g" -x c++ -H -fsyntax-only - 2>&1 | head -1
+              CXX="$g" tests/run.sh --installed
+              exit $?
+            fi
+          done
+          echo "no Homebrew GCC on this runner; skipped"
+
+      - name: cprun handles deep recursion (needs the big stack)
+        run: |
+          cat > /tmp/deep.cpp <<'EOF'
+          #include <bits/stdc++.h>
+          using namespace std;
+          int f(int n) { volatile char pad[64]; pad[0] = 1; return n == 0 ? pad[0] - 1 : 1 + f(n - 1); }
+          int main() { int n; cin >> n; cout << f(n) << endl; }
+          EOF
+          out="$(echo 1000000 | cprun /tmp/deep.cpp)"
+          test "$out" = 1000000
+
+      - name: cprun -d catches out-of-bounds access
+        run: |
+          printf '#include <bits/stdc++.h>\nint main(){ std::vector<int> v(3); int i; std::cin >> i; return v[i]; }\n' > /tmp/oob.cpp
+          if echo 5 | cprun -d /tmp/oob.cpp; then echo "out-of-bounds access was not caught"; exit 1; fi
+
+      - name: cp-mac doctor
+        run: cp-mac doctor
+
+      - name: Uninstall leaves nothing behind
+        run: |
+          cp-mac uninstall
+          test ! -e /usr/local/include/bits/stdc++.h
+          test ! -e /usr/local/include/ext/rope
+          test ! -e /usr/local/bin/cprun
+
+  homebrew:
+    name: brew install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the formula from this commit
+        run: |
+          brew tap-new --no-git local/test
+          tap="$(brew --repository)/Library/Taps/local/homebrew-test"
+          # build from this exact checkout instead of a published tarball
+          tar -czf /tmp/cp-mac.tar.gz --exclude .git -C "$GITHUB_WORKSPACE/.." "$(basename "$GITHUB_WORKSPACE")"
+          sha="$(shasum -a 256 /tmp/cp-mac.tar.gz | cut -d' ' -f1)"
+          sed -e "s|^  url .*|  url \"file:///tmp/cp-mac.tar.gz\"|" \
+              -e "s|^  sha256 .*|  sha256 \"$sha\"|" \
+              -e "s|^  head .*||" \
+              Formula/cp-mac.rb > "$tap/Formula/cp-mac.rb"
+          brew install --formula local/test/cp-mac
+      - name: brew test
+        run: brew test local/test/cp-mac
+      - name: cp-mac link (needed on Apple Silicon) + doctor
+        run: |
+          cp-mac link
+          printf '#include <bits/stdc++.h>\n#include <ext/pb_ds/assoc_container.hpp>\nint main(){}\n' > /tmp/t.cpp
+          clang++ -std=c++17 /tmp/t.cpp -o /tmp/t
+          cp-mac doctor
+
+  linux-libcxx:
+    name: ubuntu (clang + libc++)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang and libc++
+        run: sudo apt-get update && sudo apt-get install -y clang libc++-dev libc++abi-dev
+      - name: Tests with libc++
+        run: CXX="clang++ -stdlib=libc++" tests/run.sh
+      - name: Tests with libstdc++ (cp-mac must not break GCC's own headers)
+        run: CXX=g++ tests/run.sh

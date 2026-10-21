@@ -1,0 +1,284 @@
+#!/bin/sh
+# cp-mac: GCC-style competitive programming on Apple Clang.
+# https://github.com/Paras-ydv/cp-mac
+set -u
+
+CPMAC_REPO="Paras-ydv/cp-mac"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/cp-mac"
+LINK_DIR="/usr/local/include"
+
+if [ -t 2 ]; then B="$(printf '\033[1m')"; G="$(printf '\033[32m')"; R="$(printf '\033[31m')"; Y="$(printf '\033[33m')"; D="$(printf '\033[2m')"; N="$(printf '\033[0m')"
+else B=""; G=""; R=""; Y=""; D=""; N=""; fi
+ok()   { printf '  %s✓%s %s\n' "$G" "$N" "$*"; }
+bad()  { printf '  %sx%s %s\n' "$R" "$N" "$*"; }
+warn() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
+die()  { printf '%scp-mac:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+
+# Resolve this script's real location (macOS before 13 has no realpath).
+self="$0"
+case "$self" in */*) ;; *) self="$(command -v "$self")" ;; esac
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+SELF_DIR="$(cd "$(dirname "$self")" && pwd)"
+PREFIX="$(cd "$SELF_DIR/.." && pwd)"
+case "$PREFIX" in */Cellar/*) INSTALL_KIND=brew ;; *) INSTALL_KIND=script ;; esac
+[ -f "$PREFIX/install.sh" ] && INSTALL_KIND=source   # running from a clone
+VERSION="$(cat "$PREFIX/include/cp-mac/VERSION" 2>/dev/null || cat "$PREFIX/VERSION" 2>/dev/null || echo dev)"
+
+pick_cxx() {
+  if [ -n "${CXX:-}" ]; then echo "$CXX"; return; fi
+  for c in clang++ c++ g++; do command -v "$c" >/dev/null 2>&1 && { echo "$c"; return; }; done
+  die "no C++ compiler found. On a Mac run: xcode-select --install"
+}
+
+# Directory holding our headers, for when the compiler doesn't find them itself.
+include_dir() {
+  if [ "$INSTALL_KIND" = brew ] && command -v brew >/dev/null 2>&1; then
+    p="$(brew --prefix cp-mac 2>/dev/null)/include"
+    [ -d "$p" ] && { echo "$p"; return; }
+  fi
+  echo "$PREFIX/include"
+}
+
+finds_headers() {  # does the compiler find <bits/stdc++.h> + pb_ds without -I?
+  printf '#include <bits/stdc++.h>\n#include <ext/pb_ds/assoc_container.hpp>\nint main(){}\n' |
+    "$1" -x c++ -std=c++17 -fsyntax-only - >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+cmd_run() {
+  std="c++17"; debug=0; opt="-O2"; src=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -s|--std) std="$2"; shift 2 ;;
+      --std=*|-std=*) std="${1#*=}"; shift ;;
+      -d|--debug) debug=1; shift ;;
+      -O0|-O1|-O2|-O3|-Os|-Ofast) opt="$1"; shift ;;
+      -h|--help) usage_run; return 0 ;;
+      --) shift; break ;;
+      -*) die "unknown option $1 (see: cprun --help)" ;;
+      *) src="$1"; shift; break ;;
+    esac
+  done
+  [ -n "$src" ] || { usage_run; return 2; }
+  [ -f "$src" ] || die "no such file: $src"
+
+  cxx="$(pick_cxx)"
+  flags="-std=$std $opt -Wall -Wextra -Wshadow -DLOCAL"
+  [ "$debug" = 1 ] && flags="-std=$std -O1 -g -Wall -Wextra -Wshadow -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer"
+  finds_headers "$cxx" || flags="$flags -I$(include_dir)"
+  # Default stack is 8 MB on macOS; judges usually give 256 MB. Deep DFS on
+  # 1e5-1e6 nodes segfaults locally without this.
+  [ "$(uname -s)" = Darwin ] && flags="$flags -Wl,-stack_size,0x10000000"
+  flags="$flags ${CPMAC_FLAGS:-}"
+
+  mkdir -p "$CACHE"
+  abs="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
+  key="$(printf '%s|%s|%s' "$abs" "$cxx" "$flags" | cksum | cut -d' ' -f1)"
+  exe="$CACHE/$(basename "$src" | sed 's/\.[^.]*$//')-$key"
+
+  if [ ! -x "$exe" ] || [ "$src" -nt "$exe" ]; then
+    printf '%s[compiling %s with %s]%s\n' "$D" "$src" "$cxx" "$N" >&2
+    # shellcheck disable=SC2086
+    "$cxx" $flags "$src" -o "$exe" || exit 1
+  fi
+  # shellcheck disable=SC3045
+  [ "$(uname -s)" = Darwin ] || ulimit -s unlimited 2>/dev/null || true
+  "$exe" "$@"
+  code=$?
+  [ "$code" -ne 0 ] && printf '%s[exited with code %d]%s\n' "$Y" "$code" "$N" >&2
+  return "$code"
+}
+
+usage_run() {
+  cat <<EOF
+Usage: cprun [options] file.cpp [program args...]   (same as: cp-mac run)
+
+Compiles (only if the file changed) and runs a CP solution:
+  -std=c++17, -O2, -Wall -Wextra -Wshadow, -DLOCAL, and on macOS a 256 MB
+  stack so deep recursion doesn't segfault like it does with plain clang++.
+
+Options:
+  -s, --std VER    C++ standard (default c++17), e.g. -s c++20
+  -d, --debug      debug build: -D_GLIBCXX_DEBUG + AddressSanitizer + UBSan
+  -O0 .. -O3       optimisation level (default -O2)
+
+Examples:
+  cprun a.cpp < in.txt
+  cprun -d a.cpp < in.txt          # catch out-of-bounds, overflow, UB
+  CXX=g++-14 cprun a.cpp           # use another compiler
+  CPMAC_FLAGS="-DMULTI" cprun a.cpp
+EOF
+}
+
+# ---------------------------------------------------------------------------
+cmd_doctor() {
+  cxx="$(pick_cxx)"
+  printf '%scp-mac %s%s  (%s install, %s)\n\n' "$B" "$VERSION" "$N" "$INSTALL_KIND" "$PREFIX"
+  echo "${B}System${N}"
+  ok "$(uname -s) $(uname -r) on $(uname -m)"
+  if [ "$(uname -s)" = Darwin ]; then
+    if xcode-select -p >/dev/null 2>&1; then ok "Command Line Tools: $(xcode-select -p)"
+    else bad "Command Line Tools missing. Run: xcode-select --install"; fi
+  fi
+  ok "Compiler: $cxx -> $("$cxx" --version 2>&1 | head -1)"
+  if command -v g++ >/dev/null 2>&1 && g++ --version 2>&1 | grep -qi clang; then
+    warn "'g++' on this Mac is really Apple Clang (that's normal; cp-mac makes it work)."
+  fi
+
+  echo; echo "${B}Headers${N}"
+  if finds_headers "$cxx"; then
+    where="$(printf '#include <bits/stdc++.h>\n' | "$cxx" -x c++ -std=c++17 -H -fsyntax-only - 2>&1 | grep 'stdc++.h' | head -1 | sed 's/^\.* //')"
+    ok "<bits/stdc++.h> found automatically: $where"
+    if ! grep -qs cp-mac "$where" 2>/dev/null; then
+      warn "That copy is not cp-mac's (it's an older manual install or GCC's). It may break on newer Clang."
+    fi
+    inc=""
+  else
+    inc="-I$(include_dir)"
+    bad "$cxx doesn't find the headers on its own."
+    if [ "$INSTALL_KIND" = brew ]; then
+      echo "      Homebrew on Apple Silicon puts headers in ${HOMEBREW_PREFIX:-$(brew --prefix 2>/dev/null || echo /opt/homebrew)}/include,"
+      echo "      which Apple Clang doesn't search. Fix it once with:  ${B}cp-mac link${N}"
+    elif [ "$INSTALL_KIND" = script ] && [ "$PREFIX" != /usr/local ]; then
+      echo "      cp-mac was installed with a custom prefix, so add ${B}$inc${N} when compiling"
+      echo "      (cprun does this for you), or reinstall into /usr/local to make it automatic."
+    else
+      echo "      Reinstall with: curl -fsSL https://raw.githubusercontent.com/$CPMAC_REPO/main/install.sh | sh"
+    fi
+  fi
+
+  echo; echo "${B}Features${N}"
+  T="$(mktemp -d)"
+  check() {  # check <label> <program>
+    printf '%s\n' "$2" > "$T/t.cpp"
+    # shellcheck disable=SC2086
+    if "$cxx" -std=c++17 $inc "$T/t.cpp" -o "$T/t" >"$T/err" 2>&1 && "$T/t" >/dev/null 2>&1; then ok "$1"
+    else bad "$1"; sed 's/^/        /' "$T/err" | head -4; fi
+  }
+  check "#include <bits/stdc++.h>" '#include <bits/stdc++.h>
+int main(){ std::vector<int> v{2,1}; std::sort(v.begin(), v.end()); return v[0] != 1; }'
+  check "std::__gcd / std::__lg" '#include <bits/stdc++.h>
+using namespace std; int main(){ return !(__gcd(-4,6) == 2 && __lg(8) == 3); }'
+  check "pb_ds ordered_set" '#include <bits/stdc++.h>
+#include <ext/pb_ds/assoc_container.hpp>
+#include <ext/pb_ds/tree_policy.hpp>
+using namespace std; using namespace __gnu_pbds;
+int main(){ tree<int,null_type,less<int>,rb_tree_tag,tree_order_statistics_node_update> s; s.insert(3); s.insert(1); return *s.find_by_order(1) != 3; }'
+  check "pb_ds gp_hash_table" '#include <ext/pb_ds/assoc_container.hpp>
+int main(){ __gnu_pbds::gp_hash_table<int,int> h; h[1] = 2; return h[1] != 2; }'
+  check "rope" '#include <bits/stdc++.h>
+#include <ext/rope>
+using namespace __gnu_cxx; int main(){ rope<int> r; r.push_back(1); r.insert(0, 5); return r[0] != 5; }'
+  check "random_shuffle / bind2nd in C++17" '#include <bits/stdc++.h>
+using namespace std; int main(){ vector<int> v{1,2,3}; random_shuffle(v.begin(), v.end()); return (int)count_if(v.begin(), v.end(), bind2nd(less<int>(), 3)) != 2; }'
+  rm -rf "$T"
+
+  if [ "$(uname -s)" = Darwin ]; then
+    echo; echo "${B}Tips${N}"
+    echo "  - Use ${B}cprun file.cpp${N} to get a 256 MB stack (plain clang++ gives 8 MB; deep DFS crashes)."
+    echo "  - long double is 64-bit on Apple Silicon (80-bit on x86 judges): precision can differ."
+    echo "  - #pragma GCC target(\"avx2\") does nothing on Apple Silicon; clang just warns."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+cmd_link() {
+  src="$(include_dir)"
+  [ -f "$src/bits/stdc++.h" ] || die "can't find cp-mac headers in $src"
+  [ "$src" = "$LINK_DIR" ] && { echo "Headers already live in $LINK_DIR; nothing to link."; return 0; }
+  if finds_headers "$(pick_cxx)"; then
+    echo "The compiler already finds cp-mac's headers (e.g. Homebrew on an Intel Mac); nothing to link."
+    return 0
+  fi
+  if [ -f "$LINK_DIR/cp-mac/MANIFEST" ]; then
+    die "a script install of cp-mac already exists in $LINK_DIR. Remove it first: $LINK_DIR/../bin/cp-mac uninstall"
+  fi
+  SUDO=""
+  if [ ! -w "$LINK_DIR" ] && [ ! -w "$(dirname "$LINK_DIR")" ]; then SUDO="sudo"; fi
+  [ -n "$SUDO" ] && echo "Linking into $LINK_DIR needs administrator rights; you may be asked for your password."
+  $SUDO mkdir -p "$LINK_DIR" || exit 1
+  for d in bits ext cp-mac; do
+    t="$LINK_DIR/$d"
+    if [ -L "$t" ]; then $SUDO rm -f "$t"
+    elif [ -e "$t" ]; then
+      bak="$t.bak-$(date +%Y%m%d%H%M%S)"; $SUDO mv "$t" "$bak"; warn "moved existing $t to $bak"
+    fi
+    $SUDO ln -s "$src/$d" "$t" && ok "$t -> $src/$d"
+  done
+  echo "Done. Apple Clang will now find cp-mac's headers. Undo with: cp-mac unlink"
+}
+
+cmd_unlink() {
+  SUDO=""; [ -w "$LINK_DIR" ] || SUDO="sudo"
+  for d in bits ext cp-mac; do
+    t="$LINK_DIR/$d"
+    if [ -L "$t" ] && readlink "$t" | grep -q 'cp-mac'; then $SUDO rm -f "$t" && ok "removed $t"; fi
+  done
+}
+
+cmd_uninstall() {
+  case "$INSTALL_KIND" in
+    brew)
+      cmd_unlink
+      echo "Now run: brew uninstall cp-mac" ;;
+    script)
+      M="$PREFIX/include/cp-mac/MANIFEST"
+      [ -f "$M" ] || die "no install manifest at $M"
+      SUDO=""; [ -w "$PREFIX/include" ] && [ -w "$PREFIX/bin" ] || SUDO="sudo"
+      while IFS= read -r f; do [ -n "$f" ] && $SUDO rm -f "$PREFIX/$f"; done < "$M"
+      $SUDO rm -f "$M" "$PREFIX/include/cp-mac/VERSION"
+      for d in "$PREFIX/include/ext/pb_ds" "$PREFIX/include/cp-mac" "$PREFIX/include/ext" "$PREFIX/include/bits"; do
+        [ -d "$d" ] && $SUDO find "$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
+      done
+      rm -rf "$CACHE"
+      echo "cp-mac uninstalled." ;;
+    *) die "running from a source checkout; nothing to uninstall." ;;
+  esac
+}
+
+cmd_update() {
+  case "$INSTALL_KIND" in
+    brew) brew update && brew upgrade cp-mac ;;
+    script) curl -fsSL "https://raw.githubusercontent.com/$CPMAC_REPO/main/install.sh" | PREFIX="$PREFIX" sh ;;
+    *) die "running from a source checkout; use git pull." ;;
+  esac
+}
+
+usage() {
+  cat <<EOF
+cp-mac $VERSION: GCC-style competitive programming on Apple Clang
+
+Usage: cp-mac <command>
+
+  run FILE.cpp   compile & run with CP flags and a big stack (alias: cprun)
+  doctor         check that everything works and explain what doesn't
+  link           (Homebrew on Apple Silicon) make Apple Clang find the headers
+  unlink         undo 'link'
+  update         update cp-mac
+  uninstall      remove cp-mac
+  version        print the version
+
+https://github.com/$CPMAC_REPO
+EOF
+}
+
+# ---------------------------------------------------------------------------
+case "$(basename "$0")" in
+  cprun) cmd_run "$@"; exit $? ;;
+esac
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  run) cmd_run "$@" ;;
+  doctor) cmd_doctor ;;
+  link) cmd_link ;;
+  unlink) cmd_unlink ;;
+  update|upgrade) cmd_update ;;
+  uninstall) cmd_uninstall ;;
+  version|--version|-v) echo "cp-mac $VERSION" ;;
+  help|--help|-h) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
