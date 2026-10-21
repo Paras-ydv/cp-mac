@@ -25,6 +25,8 @@ int main() {
     CHECK(accumulate(v.begin(), v.end(), 0LL, std::__gcd<ll>) == 6);
 #ifdef TEMPLATE_LG
     CHECK(std::__lg<ll>(1LL << 50) == 50);
+#endif
+#ifdef _LIBCPP_VERSION   // GCC 15 rejects __int128 here in strict -std=c++NN mode
     CHECK(std::__lg((__int128)1 << 100) == 100);
 #endif
     CHECK(std::__lg(-1) == 31);                              // same-width unsigned, like GCC
