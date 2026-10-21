@@ -189,7 +189,7 @@ CXX="clang++ -stdlib=libc++" make test
 scripts/vendor-gcc.sh /path/to/gcc # update pb_ds / rope from a newer GCC
 ```
 
-Found GCC-only code that still doesn't compile on your Mac? Open an issue with the snippet.
+Found GCC-only code that still doesn't compile on your Mac? [Open an issue](https://github.com/Paras-ydv/cp-mac/issues/new/choose) with the snippet and the output of `cp-mac doctor`. See [CONTRIBUTING.md](CONTRIBUTING.md) for how the project is laid out and tested, [CHANGELOG.md](CHANGELOG.md) for what changed in each release, and [SECURITY.md](SECURITY.md) for reporting security problems privately.
 
 ## License
 

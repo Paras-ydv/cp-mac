@@ -1,0 +1,46 @@
+name: Something doesn't work
+description: cp-mac fails to install, a command misbehaves, or code that works on the judge doesn't work here.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The output of `cp-mac doctor` answers most questions, so please include it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code that shows the problem
+      description: The smallest program that still fails, if it's about compiling or running code.
+      render: cpp
+  - type: textarea
+    id: output
+    attributes:
+      label: Command and full output
+      description: The exact command (e.g. `cprun a.cpp` or `clang++ -std=c++20 a.cpp`) and everything it printed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `cp-mac doctor`
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: method
+    attributes:
+      label: How did you install cp-mac?
+      options:
+        - curl | sh (install script)
+        - Homebrew
+        - make install from a clone
+    validations:
+      required: true
