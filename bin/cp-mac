@@ -68,10 +68,11 @@ finds_headers() {  # does the compiler find <bits/stdc++.h> + pb_ds without -I?
     $1 -x c++ -std=c++17 -fsyntax-only - >/dev/null 2>&1
 }
 
-found_header() {  # the <bits/stdc++.h> the compiler picks up without -I
+found_header() {  # the <bits/stdc++.h> used without -I (nothing if it or pb_ds is missing)
   # shellcheck disable=SC2086
-  printf '#include <bits/stdc++.h>\n' | $1 -x c++ -std=c++17 -H -fsyntax-only - 2>&1 |
-    grep 'stdc++.h' | head -1 | sed 's/^\.* //'
+  out="$(printf '#include <bits/stdc++.h>\n#include <ext/pb_ds/assoc_container.hpp>\nint main(){}\n' |
+    $1 -x c++ -std=c++17 -H -fsyntax-only - 2>&1)" || return 0
+  printf '%s\n' "$out" | grep 'stdc++.h' | head -1 | sed 's/^\.* //'
 }
 
 # Can we change $1 (or create it) without sudo?
@@ -167,6 +168,8 @@ build_pch() {
 # Has anything this binary was built from changed? ($exe.d is the compiler's
 # dependency list; $exe.sum the source's checksum, which catches edits within
 # the same second and files swapped in with older timestamps.)
+# -nt isn't in POSIX, but every sh cp-mac runs on (bash, dash, busybox, zsh) has it.
+# shellcheck disable=SC3013
 needs_build() {
   [ -x "$exe" ] && [ -f "$exe.d" ] && [ "$(cat "$exe.sum" 2>/dev/null)" = "$(cksum < "$src")" ] || return 0
   awk '{ sub(/\\$/, ""); if (NR == 1) sub(/^[^:]*: */, ""); gsub(/\\ /, "\001")
@@ -198,11 +201,21 @@ cmd_run() {
   update_notice
 
   cxx="$(pick_cxx)" || exit 1
-  flags="-std=$std $opt -Wall -Wextra -Wshadow -DLOCAL"
-  [ "$debug" = 1 ] && flags="-std=$std -O1 -g -Wall -Wextra -Wshadow -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer"
+  # -Wno-unknown-pragmas: clang ignores #pragma GCC optimize/target, which
+  # nearly every CP template has; no need to warn about it on every compile.
+  flags="-std=$std $opt -Wall -Wextra -Wshadow -Wno-unknown-pragmas -DLOCAL"
+  [ "$debug" = 1 ] && flags="-std=$std -O1 -g -Wall -Wextra -Wshadow -Wno-unknown-pragmas -DLOCAL -D_GLIBCXX_DEBUG -fsanitize=address,undefined -fno-omit-frame-pointer"
   flags="$flags ${CPMAC_FLAGS:-}"
   inc=""
-  finds_headers "$cxx" || { inc="$(include_dir)"; link_hint; }
+  found="$(found_header "$cxx")"
+  [ -n "$found" ] || { inc="$(include_dir)"; link_hint; }
+  # With clang, read cp-mac's prelude before anything else, so code that
+  # includes <iostream> before <bits/stdc++.h> still gets random_shuffle etc.
+  # and -d's checks. (Real GCC needs nothing; an old hand-copied header
+  # elsewhere wouldn't have the file.)
+  if is_clang "$cxx" && { [ -n "$inc" ] || grep -qs cp-mac "$found"; }; then
+    flags="$flags -include cp-mac/prelude.h"
+  fi
   # Default stack is 8 MB on macOS; judges usually give 256 MB. Deep DFS on
   # 1e5-1e6 nodes segfaults locally without this.
   ldflags=""
