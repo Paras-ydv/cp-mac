@@ -9,14 +9,25 @@ on:
 
 jobs:
   macos:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.name || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15, macos-26, macos-15-intel]
+        os: [macos-15, macos-26, macos-15-intel, macos-26-intel]
+        include:
+          # oldest Xcode on GitHub's runners: keeps older Apple Clang / libc++ covered
+          - os: macos-15
+            name: macos-15 (Xcode 16.0)
+            xcode: /Applications/Xcode_16.0.app/Contents/Developer
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode ${{ matrix.xcode }}
+        if: matrix.xcode
+        run: |
+          if [ ! -d "${{ matrix.xcode }}" ]; then echo "::error::${{ matrix.xcode }} is not on this runner"; ls -d /Applications/Xcode*; exit 1; fi
+          echo "DEVELOPER_DIR=${{ matrix.xcode }}" >> "$GITHUB_ENV"
 
       - name: Toolchain
         run: |
@@ -48,7 +59,7 @@ jobs:
 
       - name: Real GCC from Homebrew still uses its own headers
         run: |
-          for g in g++-15 g++-14 g++-13; do
+          for g in g++-16 g++-15 g++-14 g++-13; do
             if command -v "$g" >/dev/null; then
               printf '#include <bits/stdc++.h>\nint main(){}\n' | "$g" -x c++ -H -fsyntax-only - 2>&1 | head -1
               CXX="$g" tests/run.sh --installed
@@ -72,6 +83,15 @@ jobs:
         run: |
           printf '#include <bits/stdc++.h>\nint main(){ std::vector<int> v(3); int i; std::cin >> i; return v[i]; }\n' > /tmp/oob.cpp
           if echo 5 | cprun -d /tmp/oob.cpp; then echo "out-of-bounds access was not caught"; exit 1; fi
+
+      - name: cprun rebuilds on every change and reports time and memory
+        run: |
+          set -e
+          for i in 1 2 3; do printf 'int main(){ return %d; }\n' "$i" > /tmp/q.cpp; set +e; cprun /tmp/q.cpp; r=$?; set -e; test "$r" = "$i"; done
+          printf '#include <bits/stdc++.h>\nint main(){ std::cout << __lg(1024) << "\\n"; }\n' > /tmp/s.cpp
+          cprun -t /tmp/s.cpp 2> /tmp/s.err | grep -qx 10
+          grep -E '^\[[0-9.]+ s CPU, [0-9.]+ MB\]$' /tmp/s.err
+          CXX="env clang++" cprun --no-pch /tmp/s.cpp | grep -qx 10
 
       - name: cp-mac doctor
         run: cp-mac doctor
@@ -98,10 +118,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel]
+        os: [macos-26, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install the formula from this commit
         run: |
           brew tap-new --no-git local/test
@@ -122,16 +142,46 @@ jobs:
           cp-mac link
           printf '#include <bits/stdc++.h>\n#include <ext/pb_ds/assoc_container.hpp>\nint main(){}\n' > /tmp/t.cpp
           clang++ -std=c++17 /tmp/t.cpp -o /tmp/t
+          cp-mac link | grep -q 'nothing to do'
           cp-mac doctor
+      - name: cp-mac uninstall + brew uninstall leave nothing behind
+        run: |
+          cp-mac uninstall
+          brew uninstall --formula local/test/cp-mac
+          fail=0
+          for f in /usr/local/include/bits/stdc++.h /usr/local/include/ext/pb_ds /usr/local/include/ext/rope \
+                   /usr/local/include/cp-mac "$(brew --prefix)/include/bits/stdc++.h" "$(brew --prefix)/bin/cp-mac"; do
+            if [ -e "$f" ] || [ -L "$f" ]; then echo "::error::left behind: $(ls -ld "$f")"; fail=1; fi
+          done
+          [ "$fail" -eq 0 ]
 
   linux-libcxx:
     name: ubuntu (clang + libc++)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install clang and libc++
         run: sudo apt-get update && sudo apt-get install -y clang libc++-dev libc++abi-dev
       - name: Tests with libc++
         run: CXX="clang++ -stdlib=libc++" tests/run.sh
       - name: Tests with libstdc++ (cp-mac must not break GCC's own headers)
         run: CXX=g++ tests/run.sh
+      - name: curl | sh of this exact commit, into a custom prefix
+        if: github.event_name == 'push'
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" |
+            CPMAC_REF=${{ github.sha }} CXX="clang++ -stdlib=libc++" sh -s -- --prefix "$HOME/.local"
+          printf '#include <bits/stdc++.h>\n#include <ext/rope>\nint main(){ __gnu_cxx::rope<int> r; r.push_back(5); std::cout << r[0] << "\\n"; }\n' > /tmp/r.cpp
+          test "$(CXX="clang++ -stdlib=libc++" "$HOME/.local/bin/cprun" /tmp/r.cpp)" = 5
+          "$HOME/.local/bin/cp-mac" uninstall
+          test ! -e "$HOME/.local/include/bits/stdc++.h"
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -S warning -s sh install.sh bin/cp-mac tests/run.sh
+          shellcheck -S warning scripts/vendor-gcc.sh
