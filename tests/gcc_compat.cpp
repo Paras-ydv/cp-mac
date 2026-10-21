@@ -39,12 +39,15 @@ int main() {
     __gnu_cxx::rope<int> r(100000, 7);
     CHECK(r.size() == 100000 && r[99999] == 7);
 
-    // trie with order statistics (no deprecated allocator rebind)
+    // trie with order statistics (no deprecated allocator rebind). GCC's own
+    // copy of this policy doesn't compile at C++20 and later; cp-mac's does.
+#if __cplusplus < 202002L || defined(CPMAC_PBDS_TYPELIST_HPP)
     typedef trie<string, null_type, trie_string_access_traits<>, pat_trie_tag,
                  trie_order_statistics_node_update> T;
     T t; t.insert("b"); t.insert("a"); t.insert("c");
     CHECK(t.order_of_key("b") == 1);
     CHECK(*t.find_by_order(2) == "c");
+#endif
 
     // removed from libc++ in C++17/20, still in GCC
     CHECK(count_if(v.begin(), v.end(), not1(bind2nd(greater<ll>(), 15))) == 1);
