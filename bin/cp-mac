@@ -139,11 +139,12 @@ latest_release() {  # prints the latest release tag (e.g. v1.1.0); fails with 1 
   case "$u" in */releases/tag/*) echo "${u##*/releases/tag/}" ;; *) return 2 ;; esac
 }
 
-version_gt() {  # version_gt A B: is A newer than B? (dotted numbers)
+version_gt() {  # version_gt A B: is A newer than B? (dotted numbers; "1.0.0-dev" < "1.0.0")
   awk -v a="${1#v}" -v b="${2#v}" 'BEGIN {
+    sa = sub(/-.*/, "", a); sb = sub(/-.*/, "", b)
     n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m
     for (i = 1; i <= n; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
-    exit 1 }'
+    exit !(sb && !sa) }'
 }
 
 # Prints one line when a newer release is out. The check itself runs in the
@@ -151,6 +152,7 @@ version_gt() {  # version_gt A B: is A newer than B? (dotted numbers)
 # Off with CPMAC_NO_UPDATE_CHECK=1 (and always off in CI).
 update_notice() {
   [ -z "${CPMAC_NO_UPDATE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ "$INSTALL_KIND" != source ] || return 0
+  case "$VERSION" in [0-9]*) ;; *) return 0 ;; esac   # e.g. a Homebrew --HEAD build
   if [ -t 2 ] && [ -f "$CACHE/latest" ]; then
     latest="$(cat "$CACHE/latest" 2>/dev/null)"
     if [ -n "$latest" ] && version_gt "$latest" "$VERSION"; then
@@ -215,7 +217,7 @@ needs_build() {
 
 # ---------------------------------------------------------------------------
 cmd_run() {
-  std="c++17"; debug=0; opt="-O2"; src=""; pch=1; stats=""
+  std="c++17"; debug=0; opt="-O2"; src=""; pch=1; stats=""; tflag=0
   [ -n "${CPMAC_NO_PCH:-}" ] && pch=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -224,7 +226,7 @@ cmd_run() {
       -d|--debug) debug=1; shift ;;
       -O0|-O1|-O2|-O3|-Os|-Ofast) opt="$1"; shift ;;
       --no-pch) pch=0; shift ;;
-      -t|--stats) stats=1; shift ;;
+      -t|--stats) stats=1; tflag=1; shift ;;
       -q|--quiet) stats=0; shift ;;
       -h|--help) usage_run; return 0 ;;
       --) shift; [ $# -gt 0 ] && { src="$1"; shift; }; break ;;
@@ -296,7 +298,11 @@ cmd_run() {
   [ -t 0 ] && [ -t 2 ] && note "[running; if it reads input, type it and press Ctrl+D when done]"
   if [ "$stats" = 1 ] && [ -x /usr/bin/time ]; then
     tfile="$exe.time.$$"
-    if [ "$(uname -s)" = Darwin ]; then /usr/bin/time -l -o "$tfile" "$exe" "$@"; else /usr/bin/time -f '%U %S %M' -o "$tfile" "$exe" "$@"; fi
+    # The ( ... 2>&3; exit ) 3>&2 2>/dev/null wrapper keeps the program's own
+    # stderr but hides the shell's "Segmentation fault" report; cp-mac prints
+    # a clearer one below.
+    if [ "$(uname -s)" = Darwin ]; then ( /usr/bin/time -l -o "$tfile" "$exe" "$@" 2>&3; exit $? ) 3>&2 2>/dev/null
+    else ( /usr/bin/time -f '%U %S %M' -o "$tfile" "$exe" "$@" 2>&3; exit $? ) 3>&2 2>/dev/null; fi
     code=$?
     if [ "$(uname -s)" = Darwin ]; then
       line="$(awk '/ real /{t = $3 + $5} /maximum resident set size/{m = $1 / 1048576} END {if (t != "") printf "%.2f s CPU, %.1f MB", t, m}' "$tfile" 2>/dev/null)"
@@ -306,7 +312,8 @@ cmd_run() {
     rm -f "$tfile"
     [ -n "$line" ] && printf '%s[%s%s]%s\n' "$ED" "$line" "$( [ "$debug" = 1 ] && echo ', debug build: slower and bigger than on a judge')" "$EN" >&2
   else
-    "$exe" "$@"
+    [ "$tflag" = 1 ] && note "[time and memory need /usr/bin/time: install the 'time' package]"
+    ( "$exe" "$@" 2>&3; exit $? ) 3>&2 2>/dev/null
     code=$?
   fi
   [ "$code" -ne 0 ] && printf '%s[exited with code %d%s]%s\n' "$EY" "$code" "$(signal_name "$code")" "$EN" >&2
@@ -564,7 +571,11 @@ cmd_uninstall() {
       done
       autoupdate_off quiet
       rm -rf "$CACHE"
-      echo "cp-mac uninstalled." ;;
+      echo "cp-mac uninstalled."
+      for b in "$PREFIX"/include/bits/*.bak-* "$PREFIX"/include/ext/*.bak-*; do
+        [ -e "$b" ] && warn "earlier files that cp-mac moved aside are still at $b"
+      done
+      return 0 ;;
     *) die "running from a source checkout; nothing to uninstall." ;;
   esac
 }
@@ -625,6 +636,8 @@ cmd_autoupdate() {
       bin="$PREFIX/bin/cp-mac"
       [ "$INSTALL_KIND" = brew ] && bin="${PREFIX%%/Cellar/*}/bin/cp-mac"
       mkdir -p "$(dirname "$AGENT_PLIST")" "$CACHE" || exit 1
+      xdg=""
+      [ -n "${XDG_CACHE_HOME:-}" ] && xdg="<key>XDG_CACHE_HOME</key><string>$(xml_escape "$XDG_CACHE_HOME")</string>"
       cat > "$AGENT_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -634,7 +647,7 @@ cmd_autoupdate() {
   <key>ProgramArguments</key>
   <array><string>$(xml_escape "$bin")</string><string>update</string><string>--auto</string></array>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>$(xml_escape "${PREFIX%%/Cellar/*}/bin"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <dict><key>PATH</key><string>$(xml_escape "${PREFIX%%/Cellar/*}/bin"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>$xdg</dict>
   <key>StartInterval</key><integer>86400</integer>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>

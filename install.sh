@@ -109,6 +109,10 @@ uninstall() {
     [ -d "$d" ] && $SUDO find "$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null || true
   done
   ok "cp-mac uninstalled."
+  for b in "$INC"/bits/*.bak-* "$INC"/ext/*.bak-*; do
+    [ -e "$b" ] && warn "Earlier files that cp-mac moved aside are still at $b"
+  done
+  return 0
 }
 
 # The tag of the latest GitHub release (e.g. v1.0.0), or nothing if there is none.
@@ -184,6 +188,16 @@ main() {
     || die "The downloaded files don't look like cp-mac (from ${URL:-$SRC}); nothing was changed."
 
   VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo dev)"
+  # Only the release tag itself is "1.0.0". Anything else (a branch, a commit,
+  # a checkout that isn't exactly at the tag) is marked "-dev", so that
+  # `cp-mac update` and the update notice still move it onto the release.
+  RELEASE=0
+  if [ "$SRC" = "${HERE:-}" ]; then
+    [ "$(git -C "$SRC" describe --tags --exact-match --dirty 2>/dev/null)" = "v$VERSION" ] && RELEASE=1
+  else
+    [ "$REF" = "v$VERSION" ] && RELEASE=1
+  fi
+  [ "$RELEASE" = 1 ] || VERSION="$VERSION-dev"
   say "Installing cp-mac $VERSION into $PREFIX"
   check_no_brew_links
   check_no_brew_install
