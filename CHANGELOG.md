@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Installs from `main` or a commit are labelled `X.Y.Z-dev`, so `cp-mac update` and the update notice move them onto the release.
-- `cprun` no longer prints the shell's own "Segmentation fault" line next to its crash explanation.
-- `cprun -t` on Linux says how to get time and memory stats when `/usr/bin/time` is missing.
-- `cp-mac autoupdate` keeps a custom `XDG_CACHE_HOME`; `cp-mac uninstall` lists files it had moved aside.
-
 ## 1.0.0
 
 First release.
@@ -28,4 +21,5 @@ First release.
 - One-line installer (`curl | sh`) and Homebrew (`brew install paras-ydv/cp/cp-mac`, then `cp-mac link` once on Apple Silicon).
 - `cp-mac doctor` checks the setup and says how to fix what's wrong.
 - Notices when a new release is out; `cp-mac update`, and opt-in daily updates with `cp-mac autoupdate on`.
-- Clean `cp-mac uninstall` for either install method.
+- Clean `cp-mac uninstall` for either install method; it lists any of your files it had moved aside.
+- Installs from `main` or a commit are labelled `X.Y.Z-dev`, so `cp-mac update` moves them onto the release.
