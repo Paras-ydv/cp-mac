@@ -49,11 +49,17 @@
 # endif
 #endif
 
+#endif // CPMAC_PRELUDE_H
+
 // ---- -D_GLIBCXX_DEBUG / -D_GLIBCXX_ASSERTIONS on libc++ ------------------
 // Many CP setups compile locally with -D_GLIBCXX_DEBUG to catch
 // out-of-bounds vector access etc. libc++ ignores that macro, so map it to
 // libc++'s own checks.
-#if defined(_GLIBCXX_DEBUG) || defined(_GLIBCXX_ASSERTIONS)
+// Outside the include guard on purpose: cprun reads this file before the
+// source (-include), so a `#define _GLIBCXX_DEBUG` at the top of the file is
+// only seen when <bits/stdc++.h> includes it again. It's applied as long as
+// libc++ hasn't been read yet.
+#if (defined(_GLIBCXX_DEBUG) || defined(_GLIBCXX_ASSERTIONS)) && !defined(_LIBCPP_VERSION)
 # if defined(__apple_build_version__)
 #  define CPMAC_LIBCXX_HAS_HARDENING (__clang_major__ >= 16)
 # else
@@ -80,5 +86,3 @@
 # endif
 # undef CPMAC_LIBCXX_HAS_HARDENING
 #endif
-
-#endif // CPMAC_PRELUDE_H
