@@ -198,15 +198,19 @@ build_pch() {
 }
 
 # Has anything this binary was built from changed? ($exe.d is the compiler's
-# dependency list; $exe.sum the source's checksum, which catches edits within
-# the same second and files swapped in with older timestamps.)
+# dependency list, with paths relative to the folder in $exe.cwd; $exe.sum the
+# source's checksum, which catches files swapped in with older timestamps.)
+# A dependency counts as unchanged only if the binary is strictly newer: -nt
+# compares whole seconds, so an edit in the same second as a build forces one
+# extra rebuild rather than being missed.
 # -nt isn't in POSIX, but every sh cp-mac runs on (bash, dash, busybox, zsh) has it.
 # shellcheck disable=SC3013
 needs_build() {
-  [ -x "$exe" ] && [ -f "$exe.d" ] && [ "$(cat "$exe.sum" 2>/dev/null)" = "$(cksum < "$src")" ] || return 0
+  [ -x "$exe" ] && [ -f "$exe.d" ] && [ -f "$exe.cwd" ] && [ "$(cat "$exe.sum" 2>/dev/null)" = "$(cksum < "$src")" ] || return 0
   awk '{ sub(/\\$/, ""); if (NR == 1) sub(/^[^:]*: */, ""); gsub(/\\ /, "\001")
          n = split($0, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") { gsub("\001", " ", a[i]); print a[i] } }' "$exe.d" |
-    { while IFS= read -r f; do { [ -e "$f" ] && [ ! "$f" -nt "$exe" ]; } || exit 0; done; exit 1; }
+    { cd -- "$(cat "$exe.cwd")" 2>/dev/null || exit 0
+      while IFS= read -r f; do { [ -e "$f" ] && [ "$exe" -nt "$f" ]; } || exit 0; done; exit 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -281,7 +285,7 @@ cmd_run() {
     fi
     cat "$tmp.err" >&2
     if [ "$status" -ne 0 ]; then rm -f "$tmp" "$tmp.d" "$tmp.err"; exit 1; fi
-    mv -f "$tmp" "$exe" && mv -f "$tmp.d" "$exe.d" && cksum < "$src" > "$exe.sum"
+    mv -f "$tmp" "$exe" && mv -f "$tmp.d" "$exe.d" && cksum < "$src" > "$exe.sum" && pwd > "$exe.cwd"
     rm -f "$tmp.err"
   fi
 
@@ -423,7 +427,8 @@ using namespace std; int main(){ vector<int> v{1,2,3}; random_shuffle(v.begin(),
       0) if version_gt "$latest" "$VERSION"; then warn "cp-mac ${latest#v} is available (you have $VERSION). Run: cp-mac update"
          else ok "Up to date (latest release: ${latest#v})."; fi ;;
       2) ok "No cp-mac release published yet; you have the development version $VERSION." ;;
-      *) warn "Couldn't check for updates (offline?)." ;;
+      *) if command -v curl >/dev/null 2>&1; then warn "Couldn't check for updates (offline?)."
+         else warn "Can't check for updates: curl is not installed."; fi ;;
     esac
   fi
   if [ -f "$AGENT_PLIST" ]; then ok "Automatic updates: on (turn off with: cp-mac autoupdate off)"
