@@ -5,7 +5,7 @@
 First release.
 
 **Headers**
-- `#include <bits/stdc++.h>` and `<bits/extc++.h>` for Apple Clang, for every `-std` from C++98 to C++26. Real GCC keeps using its own.
+- `#include <bits/stdc++.h>` and `<bits/extc++.h>` for Apple Clang, for every `-std` from C++11 to C++26. Real GCC keeps using its own.
 - pb_ds (`ordered_set` / `tree`, `gp_hash_table`, `cc_hash_table`, `trie`, `__gnu_pbds::priority_queue`) and rope / crope: GCC's own implementation, so results match the judge.
 - `std::__gcd` and `std::__lg` as GCC-style templates, with GCC's results.
 - `random_shuffle`, `bind1st`/`bind2nd`, `unary_function`, `ptr_fun`, `auto_ptr`, `not1`, `result_of` keep working in C++17 and later.

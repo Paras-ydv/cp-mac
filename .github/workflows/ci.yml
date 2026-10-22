@@ -92,6 +92,14 @@ jobs:
           cprun -t /tmp/s.cpp 2> /tmp/s.err | grep -qx 10
           grep -E '^\[[0-9.]+ s CPU, [0-9.]+ MB\]$' /tmp/s.err
           CXX="env clang++" cprun --no-pch /tmp/s.cpp | grep -qx 10
+          # '#define _GLIBCXX_DEBUG' at the top of the file must still turn the checks on
+          printf '#define _GLIBCXX_DEBUG\n#include <bits/stdc++.h>\nint main(){ std::vector<int> v(2); volatile int i = 5; return v[i]; }\n' > /tmp/dbg.cpp
+          set +e; cprun /tmp/dbg.cpp; r=$?; set -e; test "$r" = 134
+          # a local header edited in the same second as the build is picked up
+          printf '#include "h.h"\nint main(){ return V; }\n' > /tmp/hq.cpp
+          printf '#define V 20\n' > /tmp/h.h; set +e; cprun /tmp/hq.cpp; a=$?
+          printf '#define V 21\n' > /tmp/h.h; cprun /tmp/hq.cpp; b=$?; set -e
+          test "$a $b" = "20 21"
 
       - name: cp-mac doctor
         run: cp-mac doctor
@@ -132,7 +140,7 @@ jobs:
           sed -e "s|^  url .*|  url \"file:///tmp/cp-mac.tar.gz\"\\
             version \"$(cat VERSION)\"|" \
               -e "s|^  sha256 .*|  sha256 \"$sha\"|" \
-              -e "s|^  head .*||" \
+              -e "/^  head /d" \
               Formula/cp-mac.rb > "$tap/Formula/cp-mac.rb"
           brew install --formula local/test/cp-mac
       - name: brew test
