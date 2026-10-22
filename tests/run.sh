@@ -28,7 +28,7 @@ supports() {
 run() {  # run <name> <std> <file> [extra flags...]
   name="$1"; std="$2"; src="$3"; shift 3
   if $CXX -std="$std" $FLAGS $INC "$@" "$src" -o "$OUT/a.out" >"$OUT/log" 2>&1 \
-     && "$OUT/a.out" >"$OUT/run" 2>&1 && grep -q ': OK' "$OUT/run"; then
+     && ( "$OUT/a.out" >"$OUT/run" 2>&1; exit $? ) 2>/dev/null && grep -q ': OK' "$OUT/run"; then
     printf '  ok    %-12s %s\n' "$name" "$std"; pass=$((pass + 1))
   else
     printf '  FAIL  %-12s %s\n' "$name" "$std"; fail=$((fail + 1))
@@ -67,7 +67,7 @@ run rope-noexc c++17 tests/rope.cpp -fno-exceptions
 
 # -D_GLIBCXX_DEBUG must catch an out-of-bounds access (non-zero exit)
 if $CXX -std=c++17 $FLAGS $INC -D_GLIBCXX_DEBUG tests/debug_mode.cpp -o "$OUT/dbg" >"$OUT/log" 2>&1; then
-  if "$OUT/dbg" >"$OUT/run" 2>&1; then
+  if ( "$OUT/dbg" >"$OUT/run" 2>&1; exit $? ) 2>/dev/null; then   # (hides the shell's "Abort trap" line)
     printf '  FAIL  %-12s %s\n' debug-mode "out-of-bounds access was not caught"; fail=$((fail + 1))
   else
     printf '  ok    %-12s %s\n' debug-mode "out-of-bounds access caught"; pass=$((pass + 1))
