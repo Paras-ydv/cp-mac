@@ -134,7 +134,7 @@ cp-mac follows releases, not every commit. Once a day at most, `cprun` and `cp-m
 cp-mac 1.1.0 is available (you have 1.0.0). Update with: cp-mac update
 ```
 
-`cp-mac update` works for both install methods (for Homebrew it runs `brew upgrade`). If you'd rather not think about it, `cp-mac autoupdate on` installs new releases in the background once a day. That needs no password for Homebrew installs, or for script installs into a folder you own. Turn the check off with `CPMAC_NO_UPDATE_CHECK=1`.
+`cp-mac update` works for both install methods (for Homebrew it runs `brew upgrade`). If you'd rather not think about it, `cp-mac autoupdate on` installs new releases in the background once a day. That needs no password for Homebrew installs, or for script installs into a folder you own. Turn the check off with `CPMAC_NO_UPDATE_CHECK=1`. Installs from `main` or a specific commit (`CPMAC_REF=main`) are labelled like `1.0.0-dev`, and `cp-mac update` moves them to the latest release.
 
 ## Differences from GCC you should know about
 

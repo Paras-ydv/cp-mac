@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Installs from `main` or a commit are labelled `X.Y.Z-dev`, so `cp-mac update` and the update notice move them onto the release.
+- `cprun` no longer prints the shell's own "Segmentation fault" line next to its crash explanation.
+- `cprun -t` on Linux says how to get time and memory stats when `/usr/bin/time` is missing.
+- `cp-mac autoupdate` keeps a custom `XDG_CACHE_HOME`; `cp-mac uninstall` lists files it had moved aside.
+
 ## 1.0.0
 
 First release.
