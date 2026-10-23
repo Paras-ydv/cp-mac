@@ -14,6 +14,8 @@ Segmentation fault: 11          ← deep DFS, because macOS gives you an 8 MB st
 
 cp-mac fixes all of these with one install. You keep using Apple Clang, with no GCC download and no editor reconfiguration.
 
+![brew install paras-ydv/cp/cp-mac, then cp-mac link](docs/demo.gif)
+
 [![CI](https://github.com/Paras-ydv/cp-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/Paras-ydv/cp-mac/actions/workflows/ci.yml)
 
 ## Install
